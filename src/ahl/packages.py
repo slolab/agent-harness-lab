@@ -1,0 +1,92 @@
+"""Local package preinstall — `packages:` in config.yaml.
+
+Distinct from `capabilities.py`'s `Capability` (agent-facing skill/MCP
+wiring, per-harness): a `Package` is harness-agnostic plumbing — "install
+this CLI tool into the container, from a local checkout that's still under
+active development and isn't published anywhere yet." Wiring is identical
+regardless of which harness's container it runs in, so it lives outside
+`ahl.harnesses` and is applied once in `cli.py`.
+"""
+
+from __future__ import annotations
+
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from ahl.config import ConfigError
+from ahl.docker import Volumes
+
+CONTAINER_PACKAGES_DIR = "/opt/ahl-packages"
+INSTALL_MODES = {"mount", "copy"}
+
+
+@dataclass(frozen=True)
+class Package:
+    name: str
+    install: str
+    path: Path
+
+
+def parse_packages(raw: Any, root: Path) -> list[Package]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError("'packages' must be a list")
+    return [_parse_package(item, root) for item in raw]
+
+
+def _parse_package(item: Any, root: Path) -> Package:
+    if not isinstance(item, dict):
+        raise ConfigError("each 'packages' entry must be a mapping")
+
+    name = item.get("name")
+    if not isinstance(name, str) or not name:
+        raise ConfigError("package entry missing required 'name'")
+
+    install = item.get("install", "mount")
+    if install not in INSTALL_MODES:
+        raise ConfigError(f"package '{name}': 'install' must be one of {sorted(INSTALL_MODES)}")
+
+    raw_path = item.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ConfigError(f"package '{name}': missing required 'path'")
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    path = path.resolve()
+    if not path.is_dir():
+        raise ConfigError(f"package '{name}': path does not exist or is not a directory: {path}")
+
+    return Package(name=name, install=install, path=path)
+
+
+def wire_packages(run_dir: Path, packages: list[Package]) -> tuple[Volumes, list[str]]:
+    """Resolve packages to volume mounts + container setup commands.
+
+    `install: mount` bind-mounts the host checkout straight in (hot reload —
+    further edits on the host are picked up without rerunning `ahl up`,
+    modulo `uv tool install` caching; `install: copy` snapshots it into the
+    run dir once, for a pinned/reproducible run.
+    """
+    volumes: Volumes = []
+    setup_commands: list[str] = []
+    for pkg in packages:
+        container_path = f"{CONTAINER_PACKAGES_DIR}/{pkg.name}"
+        if pkg.install == "mount":
+            volumes.append((pkg.path, container_path))
+        else:  # copy
+            copied = _copy_package(pkg, run_dir / "packages")
+            volumes.append((copied, container_path))
+        setup_commands.append(f"uv tool install --quiet --editable {container_path}")
+    return volumes, setup_commands
+
+
+def _copy_package(pkg: Package, dest_dir: Path) -> Path:
+    dest = dest_dir / pkg.name
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(pkg.path, dest)
+    return dest

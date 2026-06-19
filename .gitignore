@@ -1,0 +1,13 @@
+/.env
+/config.yaml
+/runs/
+/projects/
+/.venv/
+/.pycache/
+/.uv-cache/
+/.uv-python/
+/dist/
+/*.egg-info/
+__pycache__/
+*.py[cod]
+.DS_Store

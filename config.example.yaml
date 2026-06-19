@@ -1,0 +1,99 @@
+# Copy to config.yaml. Keep config.yaml and .env untracked.
+#
+# config.yaml holds non-secret selection; .env holds API keys only (see
+# .env.example). `harness`, `provider`, and `model` each accept either a bare
+# name or a {name, parameters} mapping — see "Other harness/provider
+# combinations" at the bottom for worked examples.
+
+harness: gemini       # gemini | opencode | agy | claude
+provider: gemini      # anthropic | openai | gemini | vertex
+model: gemini-3.5-flash
+
+# --- Workspace ---------------------------------------------------------
+# AHL is for isolated, repeatable testing of skills/MCP servers, not for
+# driving a persistent real project — so `workspace` is a *template*, by
+# default. AHL snapshots it into runs/<id>/workspace/ fresh on every
+# `ahl up` and mounts that copy, read-write; the template itself is never
+# touched, so the same starting state is reusable across harnesses and
+# capability versions, and the snapshot is a diffable run artifact.
+
+workspace: ./projects/demo   # bare string -> install: copy (the default)
+
+# Other forms:
+#   workspace:                    # omitted entirely -> empty ephemeral
+#                                  # workspace, e.g. for testing a skill
+#                                  # against no seed data at all
+#   workspace:
+#     path: ./projects/demo
+#     install: copy               # default, spelled out: fresh snapshot
+#                                  # per run, template untouched
+#   workspace:
+#     path: ./projects/demo
+#     install: mount               # opt-in: live bind-mount, edits persist
+#                                   # straight into the template
+
+# --- Capabilities: skills/MCP servers preinstalled into the harness ----
+# See docs/capability-format.md for what a bundle looks like.
+#
+# Skill discovery: claude and opencode read `skills/<name>/SKILL.md`
+# natively (.claude/skills/, ~/.config/opencode/skills/ — see
+# https://opencode.ai/docs/skills/). gemini has no native skill concept,
+# so its SKILL.md is folded into the global ~/.gemini/GEMINI.md instead.
+# MCP wiring isn't implemented yet (parsed, but skipped with a warning).
+#
+# `install` — mount: bind-mount live from `path` (hot reload, no `ahl up`
+# restart needed) | copy: snapshot `path` once at `ahl up` time (pins the
+# exact version a run used). Either way the skill is mounted read-only —
+# the agent can use it but never write back into your checkout.
+
+# capabilities:
+#   - kind: skill
+#     name: biotope
+#     install: mount
+#     path: /absolute/or/repo-relative/path/to/biotope_by_claude
+
+# --- Packages: local (not-yet-published) CLIs to preinstall -------------
+# For a tool a skill/MCP server shells out to that's still being
+# developed alongside it (e.g. not published to PyPI yet). Same
+# `mount`/`copy` semantics and read-only mounting as capabilities above;
+# `uv tool install --editable` then puts the console-script entry point
+# on PATH before the harness shell starts. Harness-agnostic — wired the
+# same way regardless of which harness/image it's used with.
+
+# packages:
+#   - name: biotope
+#     install: mount   # hot reload: host edits picked up without rerunning `ahl up`
+#     path: /absolute/or/repo-relative/path/to/biotope
+
+# --- Provider parameters (Vertex express / Agent Platform key) ---------
+# provider:
+#   name: vertex
+#   parameters:
+#     project: your-gcp-project-id
+#     location: global
+
+# --- Model parameters (reserved for future use) -------------------------
+# model:
+#   name: gemini-3.5-flash
+#   parameters:
+#     thinking: true
+
+# --- Other harness/provider combinations --------------------------------
+# Gemini CLI on Vertex express:
+#   harness: gemini
+#   provider: {name: vertex, parameters: {project: ..., location: global}}
+#
+# Antigravity CLI (agy) — Vertex express only (no key/ADC fallback otherwise):
+#   harness: agy
+#   provider: {name: vertex, parameters: {project: ..., location: global}}
+#
+# Claude Code (Anthropic):
+#   harness: claude
+#   provider: anthropic
+#   model: claude-sonnet-4-6
+#
+# OpenCode (multi-provider; model as provider/model or bare name):
+#   harness: opencode
+#   provider: anthropic
+#   model: claude-sonnet-4-6
+#   # or provider: vertex + model: gemini-3.5-flash -> google-vertex/gemini-3.5-flash
