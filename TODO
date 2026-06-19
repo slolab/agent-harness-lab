@@ -1,6 +1,6 @@
 - parse harness-native logs for claude/agy (gemini, opencode done: runs/<id>/trace.json) — no confirmed log/session location yet
 - automated/scripted driving of the harness (next step; separate from `ahl up`)
-- re-enable default-deny egress isolation (init-firewall.sh hook + NET_ADMIN) once log-based observability lands
+
 - MCP capability wiring (Phase 2 of docs/capability-architecture.md) — skill wiring (Phase 0/1/3) is done; capabilities of kind: mcp are parsed but skipped with a warning
 - ahl-logtee capability log capture (Phase 4 of docs/capability-architecture.md) — depends on MCP wiring landing first
 - skill install modes beyond mount/copy: marketplace, git, url — deferred, not modeled in Capability/parse_capabilities yet
@@ -8,3 +8,4 @@
 - add biomni harness https://github.com/snap-stanford/biomni
 - packages: install mode beyond mount/copy — a pinned `version:` once a package like biotope is actually published to PyPI (currently only local-checkout install, see ahl.packages)
 - repeateable executions of tasks in the harness
+- re-enable default-deny egress isolation (init-firewall.sh hook + NET_ADMIN) once log-based observability lands

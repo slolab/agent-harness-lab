@@ -1,6 +1,11 @@
 # Agent Harness Lab
 
-Minimal lab for driving an agent harness (Gemini CLI, OpenCode, Claude Code, or Antigravity CLI) by hand inside a Docker container. The real provider key is injected into the container and the harness talks to its provider directly; observability comes from the harness's own logs in the workspace.
+A sandbox for testing skills and MCP servers against real agent harnesses
+(Gemini CLI, OpenCode, Claude Code, Antigravity/`agy`) in Docker — isolated
+and repeatable, not for driving a persistent project. The real provider key
+is injected into the container and the harness talks to its provider
+directly; observability comes from reading each harness's own logs, not from
+a wire proxy.
 
 ## Quickstart
 
@@ -12,13 +17,13 @@ cp config.example.yaml config.yaml
 cp .env.example .env
 ```
 
-Put your provider key in `.env` (one key, matching `provider` in `config.yaml`):
+Put your provider key in `.env` (matching `provider` in `config.yaml`):
 
 ```bash
 GEMINI_API_KEY=...
 ```
 
-Then launch the sandbox shell:
+Then launch the sandbox:
 
 ```bash
 uv run ahl up
@@ -33,32 +38,14 @@ Exit the shell to stop.
 Two files, clean split:
 
 - `.env` — **secrets only** (API keys).
-- `config.yaml` — **non-secret selection**. The host env var holding each
-  provider's key is built in per provider (`src/ahl/config.py`).
-
-`harness`, `provider`, and `model` each take either a bare name or a
-`{name, parameters}` mapping:
+- `config.yaml` — **non-secret selection**.
 
 ```yaml
 harness: gemini       # gemini | opencode | agy | claude
 provider: gemini      # anthropic | openai | gemini | vertex
 model: gemini-3.5-flash
-workspace: ./projects/demo   # mounted at /workspace
+workspace: ./projects/demo
 ```
-
-Provider with parameters (Vertex express / Agent Platform key):
-
-```yaml
-provider:
-  name: vertex
-  parameters:
-    project: your-gcp-project-id
-    location: global
-```
-
-The same `{name, parameters}` form is reserved for `harness` and `model` (e.g.
-thinking settings) — parameters are parsed today and consumed as adapters need
-them.
 
 | provider  | key env             |
 |-----------|---------------------|
@@ -67,41 +54,52 @@ them.
 | gemini    | `GEMINI_API_KEY`    |
 | vertex    | `GOOGLE_API_KEY`    |
 
-The selected harness picks its Dockerfile (`docker/<harness>.Dockerfile`) and
-image (`agent-harness-lab:<harness>`). Add a harness by adding a Dockerfile and
-an adapter in `src/ahl/harness.py`.
+`harness`, `provider`, and `model` each also accept a `{name, parameters}`
+mapping (e.g. Vertex needs `project`/`location`). See `config.example.yaml`
+for the full annotated reference, including:
 
-## Harness notes
+- **`workspace`** — a *template*, not a live project. By default it's
+  snapshotted into `runs/<id>/workspace/` fresh on every `ahl up`, so the
+  same starting state is reusable across harnesses and capability versions;
+  the template itself is never touched. Opt into `install: mount` for a live
+  bind-mount instead, or omit `workspace` entirely for an empty workspace.
+- **`capabilities`** — skills/MCP bundles to preinstall (see
+  `docs/capability-format.md`). Mounted read-only, either bind-mounted live
+  (`install: mount`, hot reload) or snapshotted once (`install: copy`).
+- **`packages`** — local, not-yet-published CLI tools to preinstall via
+  `uv tool install --editable`, for developing a tool alongside the skill
+  that depends on it.
 
-- **opencode** ([OpenCode](https://opencode.ai/docs/)) supports all four
-  providers via env keys. Model ID is `provider/model` (e.g.
-  `google-vertex/gemini-3.5-flash`); bare model names are prefixed from
-  `provider`. For **vertex** express keys, `options.apiKey` is pre-seeded in
-  `opencode.json` (without it OpenCode tries ADC and fails). Config at
-  `runs/<id>/opencode/config/`, session data at `runs/<id>/opencode/data/`.
-  Launch: `opencode -m <provider/model>`.
-- **gemini** (Gemini CLI) and **agy** both run on the `@google/genai` SDK. Use
-  `provider: gemini` (Gemini API key) or `provider: vertex` (Vertex express).
-  Launch with `gemini --skip-trust -m <model>`. Auth is pre-seeded in
-  `runs/<id>/gemini/settings.json` (`vertex-ai` or `gemini-api-key`) and
-  mounted at `/root/.gemini`. After the session, `runs/<id>/trace.json` parses
-  `logs.json` and `tmp/workspace/chats/*.jsonl`.
-- **agy** works only with Vertex express keys here (no OAuth/ADC). Prefer
-  **gemini** for a plain Gemini API key.
+## Harnesses
+
+| harness  | providers                          | launch (inside the shell)  |
+|----------|-------------------------------------|----------------------------|
+| gemini   | gemini, vertex                      | `gemini --skip-trust -m <model>` |
+| opencode | anthropic, openai, gemini, vertex   | `opencode -m <provider/model>`   |
+| claude   | anthropic                           | `claude --model <model>`         |
+| agy      | vertex only (no OAuth/ADC fallback) | `agy`                             |
+
+Auth is pre-seeded per harness before the container starts; `ahl up` prints
+the exact launch command and any harness-specific hints. Add a harness by
+adding `docker/<harness>.Dockerfile` and a `src/ahl/harnesses/<harness>.py`
+adapter — see `CLAUDE.md`.
+
+## Observability
+
+Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
+workspace mode, timestamp). **gemini** and **opencode** also persist their
+own session state under `runs/<id>/` and get a normalized `trace.json` on
+exit (sessions, messages, tool calls); **claude** and **agy** don't have a
+known log location yet.
 
 ## Isolation
 
-The real provider key is injected into the container as an env var and the
-harness reaches its provider directly. Egress is currently **unrestricted**:
-`docker/init-firewall.sh` is a permissive passthrough kept as the hook point for
-re-enabling default-deny egress later (it would also need
-`--cap-add=NET_ADMIN`).
-
-## Session record
-
-Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
-workspace, timestamp). **gemini** and **opencode** harnesses also persist state
-under `runs/<id>/` and write `trace.json` on exit.
+The real provider key is injected as an env var; the harness reaches its
+provider directly. Egress is currently **unrestricted** —
+`docker/init-firewall.sh` is a permissive passthrough kept as the hook point
+for re-enabling default-deny egress later. Capability/package mounts are
+read-only, so an agent can use a skill or local tool but never write back
+into your checkout.
 
 ## What is tracked
 
@@ -111,6 +109,4 @@ Tracked: `src/`, `docker/`, `docs/`, `pyproject.toml`, `config.example.yaml`,
 
 ## Roadmap
 
-Structured capture of harness logs (and optionally the shell), automated/scripted
-driving, re-enabled egress isolation, and pre-installed / hot-reloaded MCP
-servers and skills are next; not implemented yet. See `docs/specs.md`.
+See `TODO` and `docs/specs.md`. Next up: MCP capability wiring, better log exploration, repeatable execution of tasks by the harness

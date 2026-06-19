@@ -11,3 +11,12 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+/.pytest_cache/
+/.ruff_cache/
+/.eggs/
+/*.log
+*.lock
+biocypher-log/
+/build/
+/mappings/
+/uv.lock
