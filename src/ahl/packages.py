@@ -1,16 +1,19 @@
 """Local package preinstall — `packages:` in config.yaml.
 
 Distinct from `capabilities.py`'s `Capability` (agent-facing skill/MCP
-wiring, per-harness): a `Package` is harness-agnostic plumbing — "install
-this CLI tool into the container, from a local checkout that's still under
-active development and isn't published anywhere yet." Wiring is identical
-regardless of which harness's container it runs in, so it lives outside
-`ahl.harnesses` and is applied once in `cli.py`.
+wiring, per-harness): a `Package` is harness-agnostic plumbing — install
+a local checkout that's still under active development and isn't published
+anywhere yet. CLIs (`[project.scripts]`) are installed with `uv tool
+install`; libraries (no console entrypoints) with `uv pip install
+--system`. Wiring is identical regardless of which harness's container it
+runs in, so it lives outside `ahl.harnesses` and is applied once in
+`cli.py`.
 """
 
 from __future__ import annotations
 
 import shutil
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -79,8 +82,26 @@ def wire_packages(run_dir: Path, packages: list[Package]) -> tuple[Volumes, list
         else:  # copy
             copied = _copy_package(pkg, run_dir / "packages")
             volumes.append((copied, container_path))
-        setup_commands.append(f"uv tool install --quiet --editable {container_path}")
+        setup_commands.append(_package_setup_command(pkg.path, container_path))
     return volumes, setup_commands
+
+
+def _has_cli_entrypoints(path: Path) -> bool:
+    pyproject = path / "pyproject.toml"
+    if not pyproject.is_file():
+        return False
+    data = tomllib.loads(pyproject.read_text())
+    project = data.get("project", {})
+    if project.get("scripts") or project.get("gui-scripts"):
+        return True
+    entry_points = project.get("entry-points", {})
+    return bool(entry_points.get("console_scripts") or entry_points.get("gui_scripts"))
+
+
+def _package_setup_command(pkg_path: Path, container_path: str) -> str:
+    if _has_cli_entrypoints(pkg_path):
+        return f"uv tool install --quiet --editable {container_path}"
+    return f"uv pip install --system --break-system-packages --quiet --editable {container_path}"
 
 
 def _copy_package(pkg: Package, dest_dir: Path) -> Path:

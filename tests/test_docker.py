@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ahl.docker import docker_run_args, dockerfile_path, image_name
+from ahl.docker import GIT_IDENTITY_ENV, docker_run_args, dockerfile_path, image_name
 
 
 def test_image_name():
@@ -31,6 +31,8 @@ def test_docker_run_args_assembles_mounts_and_env(make_config, tmp_path: Path):
     assert "--name" in args and args[args.index("--name") + 1] == "ahl-test"
     assert f"{tmp_path / 'skills'}:/workspace/.claude/skills" in args
     assert "ANTHROPIC_API_KEY=test-key" in args
+    for key, value in GIT_IDENTITY_ENV.items():
+        assert f"{key}={value}" in args
     assert args[-3:] == ["agent-harness-lab:claude", "/usr/local/bin/init-firewall.sh", "bash"]
 
 

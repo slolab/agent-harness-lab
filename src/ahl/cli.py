@@ -6,7 +6,7 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -32,25 +32,52 @@ def up(
     build: Annotated[
         bool, typer.Option("--build/--no-build", help="Build harness image before launching")
     ] = True,
+    name: Annotated[
+        str | None, typer.Option("--name", "-n", help="Name this run instead of the default timestamp id")
+    ] = None,
+    resume: Annotated[
+        str | None,
+        typer.Option("--resume", help="Continue a previous run by name, reusing its workspace and harness state"),
+    ] = None,
 ) -> None:
     """Launch the configured harness in a container shell.
 
     Builds the image, injects the real provider key, then drops you into an
     interactive shell in the sandbox. Drive the harness by hand; inspect the
     harness's own logs in the workspace afterwards.
+
+    `--resume <name>` continues a previous run in its existing `runs/<name>/`
+    directory instead of starting fresh: the workspace and harness home/config
+    state from that run are reused as-is (skills are still re-wired so updates
+    apply), so a conversation/session can keep going where it left off.
     """
+
+    if resume and name:
+        raise typer.BadParameter("--resume and --name are mutually exclusive")
 
     try:
         run_config = load_config(config)
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    run_id = _run_id(run_config.harness.name)
-    run_dir = run_config.root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    if resume:
+        run_id = resume
+        run_dir = run_config.root / "runs" / run_id
+        if not run_dir.is_dir():
+            raise typer.BadParameter(f"no run named '{run_id}' found at {run_dir}")
+        _check_resumable(run_dir, run_config)
+    else:
+        run_id = name or _run_id(run_config.harness.name)
+        run_dir = run_config.root / "runs" / run_id
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise typer.BadParameter(
+                f"run '{run_id}' already exists at {run_dir} (use --resume to continue it)"
+            ) from exc
 
     try:
-        workspace_dir = resolve_workspace(run_dir, run_config.workspace)
+        workspace_dir = resolve_workspace(run_dir, run_config.workspace, resume=bool(resume))
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -79,7 +106,7 @@ def up(
         setup_commands=setup_commands,
     )
 
-    _write_session(run_dir, run_config, run_id, workspace_dir)
+    _write_session(run_dir, run_config, run_id, workspace_dir, resumed=bool(resume))
     typer.echo(f"AHL session: {run_id}")
     typer.echo(f"Provider: {run_config.provider.name} | Model: {run_config.model.name or '(harness default)'}")
     if run_config.workspace.install == "copy":
@@ -124,10 +151,46 @@ def _build_image(config: RunConfig) -> None:
     )
 
 
-def _write_session(run_dir: Path, config: RunConfig, run_id: str, workspace_dir: Path) -> None:
-    record = {
+def _check_resumable(run_dir: Path, config: RunConfig) -> None:
+    """Guard against resuming a run directory laid out for a different harness.
+
+    `run_dir/<harness>/` and the volume mounts derived from it are
+    harness-specific (see each adapter's `seed`); resuming under a different
+    harness would mount the wrong adapter's state into the wrong places.
+    """
+    session_path = run_dir / "session.json"
+    if not session_path.is_file():
+        return
+    try:
+        previous = json.loads(session_path.read_text())
+    except json.JSONDecodeError:
+        return
+    previous_harness = previous.get("harness")
+    if previous_harness and previous_harness != config.harness.name:
+        raise typer.BadParameter(
+            f"run '{run_dir.name}' was started with harness '{previous_harness}', "
+            f"but config.yaml now selects '{config.harness.name}' — can't resume across harnesses"
+        )
+
+
+def _write_session(run_dir: Path, config: RunConfig, run_id: str, workspace_dir: Path, *, resumed: bool) -> None:
+    session_path = run_dir / "session.json"
+    now = datetime.now(timezone.utc).isoformat()
+
+    started_at = now
+    resumed_at: list[str] = []
+    if resumed and session_path.is_file():
+        try:
+            previous = json.loads(session_path.read_text())
+        except json.JSONDecodeError:
+            previous = {}
+        started_at = previous.get("started_at", now)
+        resumed_at = list(previous.get("resumed_at", []))
+        resumed_at.append(now)
+
+    record: dict[str, Any] = {
         "run_id": run_id,
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": started_at,
         "harness": config.harness.name,
         "provider": config.provider.name,
         "model": config.model.name or None,
@@ -135,7 +198,9 @@ def _write_session(run_dir: Path, config: RunConfig, run_id: str, workspace_dir:
         "workspace_install": config.workspace.install,
         "workspace_template": str(config.workspace.path) if config.workspace.path else None,
     }
-    (run_dir / "session.json").write_text(json.dumps(record, indent=2, sort_keys=True))
+    if resumed_at:
+        record["resumed_at"] = resumed_at
+    session_path.write_text(json.dumps(record, indent=2, sort_keys=True))
 
 
 def _run_id(harness: str) -> str:

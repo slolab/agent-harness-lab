@@ -52,3 +52,29 @@ def test_resolve_workspace_mount_uses_template_directly(tmp_path: Path):
     resolved = resolve_workspace(tmp_path / "run", ws)
     assert resolved == template
     assert template.is_dir()  # created if missing
+
+
+def test_resolve_workspace_resume_reuses_existing_copy_without_resnapshotting(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "data.txt").write_text("seed data")
+    run_dir = tmp_path / "run"
+
+    ws = parse_workspace(str(template), tmp_path)
+    resolved = resolve_workspace(run_dir, ws)
+    (resolved / "progress.txt").write_text("work done in a prior run")
+
+    resumed = resolve_workspace(run_dir, ws, resume=True)
+
+    assert resumed == resolved
+    assert (resumed / "progress.txt").read_text() == "work done in a prior run"
+    assert (resumed / "data.txt").read_text() == "seed data"
+
+
+def test_resolve_workspace_resume_without_prior_copy_errors(tmp_path: Path):
+    template = tmp_path / "template"
+    template.mkdir()
+    ws = parse_workspace(str(template), tmp_path)
+
+    with pytest.raises(ConfigError, match="cannot resume"):
+        resolve_workspace(tmp_path / "run", ws, resume=True)

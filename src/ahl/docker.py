@@ -13,6 +13,12 @@ from ahl.config import RunConfig
 IMAGE_REPOSITORY = "agent-harness-lab"
 INIT_SCRIPT = "/usr/local/bin/init-firewall.sh"
 CONTAINER_WORKSPACE = "/workspace"
+GIT_IDENTITY_ENV = {
+    "GIT_AUTHOR_NAME": "Agent Harness Lab",
+    "GIT_AUTHOR_EMAIL": "ahl@localhost",
+    "GIT_COMMITTER_NAME": "Agent Harness Lab",
+    "GIT_COMMITTER_EMAIL": "ahl@localhost",
+}
 
 Volumes = list[tuple[Path, str]]
 
@@ -69,7 +75,7 @@ def docker_run_args(
         args.extend(["-v", f"{host}:{container}"])
     for host, container in readonly_volumes or []:
         args.extend(["-v", f"{host}:{container}:ro"])
-    for key, value in env.items():
+    for key, value in {**GIT_IDENTITY_ENV, **env}.items():
         args.extend(["-e", f"{key}={value}"])
     args.append(image_name(config.harness.name))
     if setup_commands:

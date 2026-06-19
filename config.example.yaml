@@ -52,13 +52,14 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #     install: mount
 #     path: /absolute/or/repo-relative/path/to/biotope_by_claude
 
-# --- Packages: local (not-yet-published) CLIs to preinstall -------------
-# For a tool a skill/MCP server shells out to that's still being
-# developed alongside it (e.g. not published to PyPI yet). Same
-# `mount`/`copy` semantics and read-only mounting as capabilities above;
-# `uv tool install --editable` then puts the console-script entry point
-# on PATH before the harness shell starts. Harness-agnostic — wired the
-# same way regardless of which harness/image it's used with.
+# --- Packages: local (not-yet-published) Python checkouts to preinstall --
+# For a CLI or library a skill depends on that's still being developed
+# alongside it (e.g. not published to PyPI yet). Same `mount`/`copy`
+# semantics and read-only mounting as capabilities above. AHL inspects
+# `pyproject.toml`: CLIs (`[project.scripts]`) get `uv tool install
+# --editable` (console script on PATH); libraries get `uv pip install
+# --system --editable`. Harness-agnostic — wired the same way regardless
+# of which harness/image it's used with.
 
 # packages:
 #   - name: biotope

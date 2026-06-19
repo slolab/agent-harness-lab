@@ -54,13 +54,18 @@ def _resolve_path(value: str, root: Path) -> Path:
     return path.resolve()
 
 
-def resolve_workspace(run_dir: Path, workspace: Workspace) -> Path:
+def resolve_workspace(run_dir: Path, workspace: Workspace, *, resume: bool = False) -> Path:
     """Return the host directory to mount at /workspace, materializing it if needed.
 
     `mount`: the template directory itself, live and persistent (created if
     missing). `copy`: a fresh snapshot of the template under
     `run_dir/workspace/`, or an empty directory there if no template was given
     — the template itself is never written to.
+
+    `resume=True` (continuing a previous run in its existing `run_dir`) skips
+    re-snapshotting the template: `run_dir/workspace/` already holds whatever
+    state the prior run left behind, and that's exactly what should keep
+    accumulating.
     """
     if workspace.install == "mount":
         assert workspace.path is not None  # enforced at parse time
@@ -68,6 +73,11 @@ def resolve_workspace(run_dir: Path, workspace: Workspace) -> Path:
         return workspace.path
 
     dest = run_dir / "workspace"
+    if resume:
+        if not dest.is_dir():
+            raise ConfigError(f"cannot resume: no workspace found at {dest}")
+        return dest
+
     if workspace.path is not None:
         if not workspace.path.is_dir():
             raise ConfigError(f"workspace template does not exist or is not a directory: {workspace.path}")

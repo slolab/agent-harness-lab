@@ -66,9 +66,14 @@ for the full annotated reference, including:
 - **`capabilities`** — skills/MCP bundles to preinstall (see
   `docs/capability-format.md`). Mounted read-only, either bind-mounted live
   (`install: mount`, hot reload) or snapshotted once (`install: copy`).
-- **`packages`** — local, not-yet-published CLI tools to preinstall via
-  `uv tool install --editable`, for developing a tool alongside the skill
-  that depends on it.
+- **`packages`** — local, not-yet-published Python checkouts to preinstall
+  (`uv tool install` for CLIs, `uv pip install --system` for libraries),
+  for developing a tool alongside the skill that depends on it.
+
+Runs are named: `ahl up --name my-run` uses `runs/my-run/` instead of the
+default `<timestamp>-<harness>` id. `ahl up --resume my-run` continues that
+run in place — same workspace, same harness home/config state (sessions,
+chat history, etc.) — instead of starting a fresh `runs/<id>/`.
 
 ## Harnesses
 
