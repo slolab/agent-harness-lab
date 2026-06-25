@@ -13,7 +13,7 @@ import typer
 from ahl.config import ConfigError, RunConfig, load_config
 from ahl.docker import CONTAINER_WORKSPACE, docker_run_args, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
-from ahl.packages import wire_packages
+from ahl.packages import PackageCopy, wire_packages
 from ahl.workspace import resolve_workspace
 
 app = typer.Typer(no_args_is_help=True)
@@ -91,11 +91,12 @@ def up(
     try:
         extra_volumes = adapter.seed(run_dir, run_config)
         readonly_volumes = adapter.wire_capabilities(run_dir, run_config, run_config.capabilities)
-        package_volumes, setup_commands = wire_packages(run_dir, run_config.packages)
+        package_volumes, package_copies, setup_commands = wire_packages(run_dir, run_config.packages)
         readonly_volumes += package_volumes
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    use_copy_flow = bool(package_copies)
     args = docker_run_args(
         run_config,
         env,
@@ -103,7 +104,9 @@ def up(
         name=container_name,
         extra_volumes=extra_volumes,
         readonly_volumes=readonly_volumes,
-        setup_commands=setup_commands,
+        setup_commands=None if use_copy_flow else setup_commands,
+        detached=use_copy_flow,
+        hold=use_copy_flow,
     )
 
     _write_session(run_dir, run_config, run_id, workspace_dir, resumed=bool(resume))
@@ -122,6 +125,8 @@ def up(
         typer.echo(f"Mount: {host} -> {container}")
     for host, container in readonly_volumes:
         typer.echo(f"Mount: {host} -> {container} (ro)")
+    for copy in package_copies:
+        typer.echo(f"Copy: {copy.host_path} -> {copy.container_path}")
     for cmd in setup_commands:
         typer.echo(f"Setup: {cmd}")
     typer.echo(f"Start the harness inside the shell with:\n  {adapter.start_command(run_config)}")
@@ -130,7 +135,10 @@ def up(
     typer.echo("Exit the shell to stop.")
 
     try:
-        subprocess.run(args, check=False)
+        if use_copy_flow:
+            _run_with_copied_packages(container_name, args, package_copies, setup_commands)
+        else:
+            subprocess.run(args, check=False)
     except KeyboardInterrupt:
         subprocess.run(["docker", "rm", "-f", container_name], check=False)
     finally:
@@ -139,6 +147,34 @@ def up(
             trace_path = run_dir / "trace.json"
             trace_path.write_text(json.dumps(trace, indent=2, sort_keys=True))
             typer.echo(f"Trace: {trace_path}")
+
+
+def _run_with_copied_packages(
+    container_name: str,
+    run_args: list[str],
+    package_copies: list[PackageCopy],
+    setup_commands: list[str],
+) -> None:
+    """Start detached, docker cp packages in, setup, then interactive bash."""
+    subprocess.run(run_args, check=True)
+    try:
+        for copy in package_copies:
+            subprocess.run(
+                ["docker", "exec", container_name, "mkdir", "-p", copy.container_path],
+                check=True,
+            )
+            subprocess.run(
+                ["docker", "cp", f"{copy.host_path}/.", f"{container_name}:{copy.container_path}/"],
+                check=True,
+            )
+        if setup_commands:
+            subprocess.run(
+                ["docker", "exec", container_name, "sh", "-c", " && ".join(setup_commands)],
+                check=True,
+            )
+        subprocess.run(["docker", "exec", "-it", container_name, "bash"], check=False)
+    finally:
+        subprocess.run(["docker", "rm", "-f", container_name], check=False)
 
 
 def _build_image(config: RunConfig) -> None:

@@ -54,12 +54,15 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 
 # --- Packages: local (not-yet-published) Python checkouts to preinstall --
 # For a CLI or library a skill depends on that's still being developed
-# alongside it (e.g. not published to PyPI yet). Same `mount`/`copy`
-# semantics and read-only mounting as capabilities above. AHL inspects
-# `pyproject.toml`: CLIs (`[project.scripts]`) get `uv tool install
-# --editable` (console script on PATH); libraries get `uv pip install
-# --system --editable`. Harness-agnostic — wired the same way regardless
-# of which harness/image it's used with.
+# alongside it (e.g. not published to PyPI yet).
+#
+# `install: mount` — bind-mount read-only; hot reload on host (hatchling
+# editable OK; setuptools may need `copy` instead).
+# `install: copy` — snapshot to runs/<id>/packages/<name>/, then `docker cp`
+# into the container (writable, no mount). Pins version per run.
+#
+# AHL inspects `pyproject.toml`: CLIs get `uv tool install --editable`;
+# libraries get `uv pip install --system --editable`.
 
 # packages:
 #   - name: biotope

@@ -1,8 +1,8 @@
-uv run python <<'PY' > runs/20260624T153023Z-opencode/conversation-condensed.json
+uv run python <<'PY' > runs/vhmodels-test/conversation-condensed.json
 import json, sqlite3
 from pathlib import Path
 
-db = Path("runs/20260624T153023Z-opencode/opencode/data/opencode.db")
+db = Path("runs/vhmodels-test/opencode/data/opencode.db")
 conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 sessions = []
 for sid, title in conn.execute("SELECT id, title FROM session"):
@@ -27,5 +27,5 @@ for sid, title in conn.execute("SELECT id, title FROM session"):
                     entry["error"] = st["error"]
                 turns.append(entry)
     sessions.append({"id": sid, "title": title, "turns": turns})
-print(json.dumps({"run_id": "20260624T153023Z-opencode", "sessions": sessions}, indent=2, ensure_ascii=False))
+print(json.dumps({"run_id": "vhmodels-test", "sessions": sessions}, indent=2, ensure_ascii=False))
 PY

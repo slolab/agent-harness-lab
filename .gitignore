@@ -1,5 +1,7 @@
 /.env
-/config.yaml
+config.*.yaml
+config.yaml
+!config.example.yaml
 /runs/
 /projects/
 /.venv/

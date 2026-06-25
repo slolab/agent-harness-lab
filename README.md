@@ -67,8 +67,9 @@ for the full annotated reference, including:
   `docs/capability-format.md`). Mounted read-only, either bind-mounted live
   (`install: mount`, hot reload) or snapshotted once (`install: copy`).
 - **`packages`** — local, not-yet-published Python checkouts to preinstall
-  (`uv tool install` for CLIs, `uv pip install --system` for libraries),
-  for developing a tool alongside the skill that depends on it.
+  (`uv tool install` for CLIs, `uv pip install --system` for libraries).
+  `install: mount` bind-mounts read-only; `install: copy` snapshots then
+  `docker cp`s into the container (writable — needed for setuptools editable).
 
 Runs are named: `ahl up --name my-run` uses `runs/my-run/` instead of the
 default `<timestamp>-<harness>` id. `ahl up --resume my-run` continues that

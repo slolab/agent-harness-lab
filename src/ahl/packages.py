@@ -32,6 +32,14 @@ class Package:
     path: Path
 
 
+@dataclass(frozen=True)
+class PackageCopy:
+    """Host directory to `docker cp` into the container (install: copy)."""
+
+    host_path: Path
+    container_path: str
+
+
 def parse_packages(raw: Any, root: Path) -> list[Package]:
     if raw is None:
         return []
@@ -65,15 +73,21 @@ def _parse_package(item: Any, root: Path) -> Package:
     return Package(name=name, install=install, path=path)
 
 
-def wire_packages(run_dir: Path, packages: list[Package]) -> tuple[Volumes, list[str]]:
-    """Resolve packages to volume mounts + container setup commands.
+def wire_packages(
+    run_dir: Path, packages: list[Package]
+) -> tuple[Volumes, list[PackageCopy], list[str]]:
+    """Resolve packages to mounts, container copies, and setup commands.
 
-    `install: mount` bind-mounts the host checkout straight in (hot reload —
-    further edits on the host are picked up without rerunning `ahl up`,
-    modulo `uv tool install` caching; `install: copy` snapshots it into the
-    run dir once, for a pinned/reproducible run.
+    `install: mount` bind-mounts the host checkout read-only (hot reload on
+    host; editable install must not write into the source — hatchling OK,
+  setuptools needs `install: copy`).
+
+    `install: copy` snapshots into `run_dir/packages/<name>/` on the host,
+    then `cli.py` `docker cp`s that tree into the container filesystem (no
+    mount — writable, so setuptools editable install works).
     """
     volumes: Volumes = []
+    copies: list[PackageCopy] = []
     setup_commands: list[str] = []
     for pkg in packages:
         container_path = f"{CONTAINER_PACKAGES_DIR}/{pkg.name}"
@@ -81,9 +95,9 @@ def wire_packages(run_dir: Path, packages: list[Package]) -> tuple[Volumes, list
             volumes.append((pkg.path, container_path))
         else:  # copy
             copied = _copy_package(pkg, run_dir / "packages")
-            volumes.append((copied, container_path))
+            copies.append(PackageCopy(host_path=copied, container_path=container_path))
         setup_commands.append(_package_setup_command(pkg.path, container_path))
-    return volumes, setup_commands
+    return volumes, copies, setup_commands
 
 
 def _has_cli_entrypoints(path: Path) -> bool:

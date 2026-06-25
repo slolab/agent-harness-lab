@@ -40,6 +40,8 @@ def docker_run_args(
     extra_volumes: Volumes | None = None,
     readonly_volumes: Volumes | None = None,
     setup_commands: list[str] | None = None,
+    detached: bool = False,
+    hold: bool = False,
 ) -> list[str]:
     """Assemble the `docker run` invocation.
 
@@ -58,17 +60,27 @@ def docker_run_args(
     (e.g. `uv tool install --editable <path>` for a preinstalled local
     package) — implemented as a shell one-liner since the container's command
     is otherwise just `init-firewall.sh bash`.
+
+    `detached` + `hold` start the container in the background (`sleep
+    infinity`) so `cli.py` can `docker cp` package trees in before setup.
     """
     args = [
         "docker",
         "run",
         "--rm",
-        "-it",
-        "-v",
-        f"{workspace_dir}:{CONTAINER_WORKSPACE}",
-        "-w",
-        CONTAINER_WORKSPACE,
     ]
+    if detached:
+        args.append("-d")
+    else:
+        args.append("-it")
+    args.extend(
+        [
+            "-v",
+            f"{workspace_dir}:{CONTAINER_WORKSPACE}",
+            "-w",
+            CONTAINER_WORKSPACE,
+        ]
+    )
     if name:
         args.extend(["--name", name])
     for host, container in extra_volumes or []:
@@ -78,7 +90,9 @@ def docker_run_args(
     for key, value in {**GIT_IDENTITY_ENV, **env}.items():
         args.extend(["-e", f"{key}={value}"])
     args.append(image_name(config.harness.name))
-    if setup_commands:
+    if hold or detached:
+        args.extend([INIT_SCRIPT, "sleep", "infinity"])
+    elif setup_commands:
         shell_cmd = " && ".join([*setup_commands, "exec bash"])
         args.extend([INIT_SCRIPT, "sh", "-c", shell_cmd])
     else:

@@ -65,3 +65,19 @@ def test_docker_run_args_setup_commands_chain_into_exec_bash(make_config, tmp_pa
 
     assert args[-1] == "uv tool install --quiet --editable /opt/ahl-packages/foo && exec bash"
     assert args[-5:-1] == ["agent-harness-lab:claude", "/usr/local/bin/init-firewall.sh", "sh", "-c"]
+
+
+def test_docker_run_args_detached_hold_uses_sleep_infinity(make_config, tmp_path: Path):
+    config = make_config(harness="claude", provider="anthropic")
+    args = docker_run_args(
+        config,
+        {"ANTHROPIC_API_KEY": "test-key"},
+        tmp_path / "ws",
+        name="ahl-test",
+        detached=True,
+        hold=True,
+    )
+
+    assert "-d" in args
+    assert "-it" not in args
+    assert args[-3:] == ["/usr/local/bin/init-firewall.sh", "sleep", "infinity"]
