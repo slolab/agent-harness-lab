@@ -13,6 +13,7 @@ runs in, so it lives outside `ahl.harnesses` and is applied once in
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -123,5 +124,23 @@ def _copy_package(pkg: Package, dest_dir: Path) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(pkg.path, dest)
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            cwd=pkg.path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        rel_paths = [p for p in result.stdout.splitlines() if p]
+        dest.mkdir(parents=True, exist_ok=True)
+        for rel in rel_paths:
+            src = pkg.path / rel
+            dst = dest / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_file() or src.is_symlink():
+                shutil.copy2(src, dst, follow_symlinks=False)
+    except subprocess.CalledProcessError:
+        # Not a git repo — fall back to plain copytree
+        shutil.copytree(pkg.path, dest)
     return dest
