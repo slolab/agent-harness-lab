@@ -1,6 +1,6 @@
-# Capability architecture — implementation plan
+# Capability architecture — historical implementation plan
 
-Implementation plan for mounting external capabilities (MCP servers, Agent Skills — see `docs/capability-format.md` for what a bundle looks like) into AHL-driven harness runs, and for the `src/ahl` refactor this requires. No code has been written yet; this is the design future implementation should follow.
+This records the adapter refactor and remaining MCP direction. The refactor and skill wiring have since landed. [`specs/delegated-skill-installation.md`](../specs/delegated-skill-installation.md) supersedes this document's skill installation and fallback sections: only local `mount` remains adapter-owned; local `copy` and remote `npx` installs are delegated to `vercel-labs/skills`.
 
 ## Why a refactor, not just a config addition
 
@@ -31,13 +31,13 @@ A registry/factory, `get_adapter(harness_name: str) -> HarnessAdapter`, is the s
 class Capability:
     kind: Literal["mcp", "skill"]
     name: str
-    install: Literal["mount", "copy", "pip"]
+    install: Literal["mount", "copy", "npx", "pip"]
     # kind == "mcp": command, args, env
     # kind == "skill": path (required for install in {mount, copy})
     # install == "mount": bind-mount `path` straight from the host — hot reload
-    # install == "copy": snapshot `path` into the run dir once, at `ahl up` time
+    # install == "copy": install local `path` through `npx skills`
+    # install == "npx": install remote `source` through `npx skills`
     # install == "pip": mcp only; version (optional)
-    # Marketplace/git/url installs are deferred — not modeled here yet.
 ```
 
 Parsed from a new `capabilities:` list in `config.yaml` using the same bare-string-or-`{name, parameters}` pattern `config.py`'s `_parse_named` already implements for `harness`/`provider`/`model` — reuse that parser, don't write a second one.
@@ -47,8 +47,8 @@ Parsed from a new `capabilities:` list in `config.yaml` using the same bare-stri
 Each `HarnessAdapter` holds a `CapabilityWirer` rather than inheriting one, so behavior is shared by composition:
 
 - A native-MCP-config writer — one implementation per harness, since the config file format differs (`.mcp.json` vs `settings.json`'s `mcpServers` vs `opencode.json`'s `mcp` block), but the input (`Capability` with `kind="mcp"`) is identical.
-- A native-skill-dir writer — shared by Claude and OpenCode, since both natively discover `skills/<name>/SKILL.md` on disk (Claude: `.claude/skills/<name>/`; OpenCode: `~/.config/opencode/skills/<name>/` or `.opencode/skills/<name>/`/`.claude/skills/<name>/` project-local — see https://opencode.ai/docs/skills/, no config-file edit needed, it's pure filesystem discovery). Honors `install`: `mount` bind-mounts the skill straight from its host path (hot reload — host edits show up in the container immediately); `copy` snapshots it into the run dir once at `ahl up` time. Either way, for Claude this needs a volume mount over the workspace's `.claude/skills`; for OpenCode a `mount`-mode skill is bind-mounted over the already-mounted config dir, while `copy` mode just lands inside that same mount with no extra volume.
-- A fallback "fold `SKILL.md` into the harness's context file" writer — one implementation, reused by `GeminiAdapter` and `AgyAdapter`'s wirers, since neither has a native skill concept (Gemini: global `~/.gemini/GEMINI.md`; agy: unverified, currently a no-op + warning instead of a guess).
+- A native-skill-dir writer per harness for local `mount` only. Claude, Gemini, OpenCode, and Antigravity receive a read-only bind mount at their native skill path, preserving live host edits.
+- Delegated local-copy and remote installation live outside the adapters in `skills.py`; AHL supplies only the active harness's installer agent identifier.
 
 A harness lacking support for a capability kind degrades to the fallback (or a no-op + a logged warning for MCP-incapable harnesses, if any turn out to exist) — never a hard error.
 
@@ -58,6 +58,7 @@ Separate from wiring: makes sure the capability's underlying package/checkout is
 
 - `install: pip` → a `RUN pip install <name>[==version]` line baked into the relevant `docker/<harness>.Dockerfile` at build time.
 - `install: mount` → volume-mount the host checkout (same mechanism `cli.py` already uses for `extra_volumes`) and run an editable install at container start.
+- Skill `install: copy`/`npx` → run the external skills installer globally and non-interactively before the harness shell starts.
 
 Kept separate from `CapabilityWirer` deliberately — "is it installed" and "is it wired into this harness's config" are independent concerns (Single Responsibility); a capability could in principle be installed but not wired (e.g. for manual experimentation), or wired against a path that's installed by some other means.
 
@@ -96,6 +97,6 @@ One smoke-test path per harness should still assemble full `docker_run_args` end
 
 ## Open questions
 
-- **agy's actual MCP/skill support is unverified.** No confirmed config surface found yet; Phase 2/3 may end up best-effort (PATH-only) for this harness.
+- **agy's MCP support is unverified.** Skill installation targets the external installer's `antigravity-cli` agent path; the real-container acceptance check remains required.
 - **Exact package names** for the biotope/biocypher MCP wrappers are TBD — decided in those repos during Phase 5, not here.
 - **`variant: both`** (mounting skill and MCP for the same tool simultaneously, to measure which the agent prefers when given the choice) — whether this ships in v1 of capability wiring or is deferred past Phase 5 is undecided; the `Capability` list shape (one entry per kind, same `name`) already supports it without a model change either way.

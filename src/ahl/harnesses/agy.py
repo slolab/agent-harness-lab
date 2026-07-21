@@ -1,14 +1,15 @@
-"""Antigravity (agy) adapter — env only; no confirmed skill/MCP config surface yet."""
+"""Antigravity (agy) adapter — env and native skill mounts."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
 from ahl.capabilities import Capability
 from ahl.config import RunConfig
-from ahl.harnesses.base import Volumes, google_env
+from ahl.harnesses.base import Volumes, google_env, native_skill_mount, warn_unsupported_mcp
+
+CONTAINER_AGY_SKILLS = "/root/.gemini/antigravity-cli/skills"
 
 
 class AgyAdapter:
@@ -19,13 +20,12 @@ class AgyAdapter:
         return []
 
     def wire_capabilities(self, run_dir: Path, config: RunConfig, capabilities: list[Capability]) -> Volumes:
-        for cap in capabilities:
-            print(
-                f"[ahl] warning: capability '{cap.name}' ({cap.kind}) is not supported on "
-                "harness 'agy' yet (no confirmed skill/MCP config surface) — skipping",
-                file=sys.stderr,
-            )
-        return []
+        warn_unsupported_mcp("agy", capabilities)
+        return [
+            (skill.path, native_skill_mount(skill, CONTAINER_AGY_SKILLS))
+            for skill in capabilities
+            if skill.kind == "skill" and skill.install == "mount" and skill.path is not None
+        ]
 
     def parse_trace(self, run_dir: Path) -> dict[str, Any] | None:
         return None
@@ -33,5 +33,8 @@ class AgyAdapter:
     def start_command(self, config: RunConfig) -> str:
         return "agy"  # model comes from GEMINI_MODEL env
 
-    def start_hints(self, config: RunConfig) -> list[str]:
+    def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]:
+        return []
+
+    def docker_args(self, config: RunConfig) -> list[str]:
         return []

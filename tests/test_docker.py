@@ -43,6 +43,13 @@ def test_docker_run_args_no_extra_volumes_or_name(make_config, tmp_path: Path):
     assert args.count("-v") == 1  # only the workspace mount
 
 
+def test_docker_run_args_includes_adapter_specific_args(make_config, tmp_path: Path):
+    config = make_config(harness="claude-science", provider="anthropic", api_key="")
+    extra_args = ["--platform", "linux/amd64", "-p", "127.0.0.1:8000:8000"]
+    args = docker_run_args(config, {}, tmp_path / "ws", extra_args=extra_args)
+    assert args[4:8] == extra_args
+
+
 def test_docker_run_args_readonly_volumes_get_ro_suffix(make_config, tmp_path: Path):
     config = make_config(harness="claude", provider="anthropic")
     args = docker_run_args(

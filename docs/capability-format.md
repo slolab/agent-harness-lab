@@ -4,12 +4,11 @@ This is the reference for whoever bundles a tool (e.g. `biotope`, `biocypher`) a
 
 ## Skills
 
-Use the standard Agent Skill format: a directory with a `SKILL.md` (YAML frontmatter + instructions) at its root, optionally alongside `scripts/`/`references/`/other resources. Anthropic's Agent Skills documentation is the authoritative spec for frontmatter fields and directory layout — verify against it at bundling time rather than against this doc:
+Use the standard Agent Skill format: a directory with a `SKILL.md` (YAML frontmatter + instructions) at its root, optionally alongside `scripts/`/`references`/`assets`/other resources. The Agent Skills specification is authoritative for frontmatter fields and directory layout — verify against it at bundling time rather than against this doc:
 
-- https://docs.claude.com/en/docs/claude-code/skills
-- https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills
+- https://agentskills.io/specification
 
-**AHL's only added expectation:** the skill directory is self-contained and addressable by a host path — `config.yaml`'s `capabilities` list will reference it by path, the same way `workspace` is referenced today.
+**AHL's only added expectation:** a local skill directory is self-contained and addressable by a host path. Remote skills are named within a source format accepted by `vercel-labs/skills`; AHL delegates remote discovery and installation instead of defining a repository format.
 
 ## MCP servers
 

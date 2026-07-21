@@ -9,7 +9,7 @@ from typing import Any
 
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
-from ahl.harnesses.base import Volumes, copy_skill_bundle, native_skill_mount, provider_key, warn_unsupported_mcp
+from ahl.harnesses.base import Volumes, native_skill_mount, provider_key, warn_unsupported_mcp
 
 CONTAINER_CONFIG_DIR = "/root/.config/opencode"
 CONTAINER_DATA_DIR = "/root/.local/share/opencode"
@@ -64,18 +64,14 @@ class OpenCodeAdapter:
         warn_unsupported_mcp("opencode", capabilities)
         # OpenCode natively discovers skills under ~/.config/opencode/skills/<name>/SKILL.md
         # (also .opencode/skills, .claude/skills — see https://opencode.ai/docs/skills/).
-        config_dir = self._config_dir(run_dir)
         container_skills_dir = f"{CONTAINER_CONFIG_DIR}/skills"
         volumes: Volumes = []
         for skill in capabilities:
-            if skill.kind != "skill" or skill.path is None:
+            if skill.kind != "skill" or skill.install != "mount" or skill.path is None:
                 continue
-            if skill.install == "mount":
-                # Bind-mounted straight from the host path (overlaying the
-                # already-mounted config_dir): hot reload, no copy step.
-                volumes.append((skill.path, native_skill_mount(skill, container_skills_dir)))
-            else:  # copy — lands inside config_dir, which is already mounted as a whole
-                copy_skill_bundle(skill, config_dir / "skills")
+            # Bind-mounted straight from the host path (overlaying the
+            # already-mounted config_dir): hot reload, no copy step.
+            volumes.append((skill.path, native_skill_mount(skill, container_skills_dir)))
         return volumes
 
     def parse_trace(self, run_dir: Path) -> dict[str, Any] | None:
@@ -84,13 +80,16 @@ class OpenCodeAdapter:
     def start_command(self, config: RunConfig) -> str:
         return f"opencode -m {model_id(config)}"
 
-    def start_hints(self, config: RunConfig) -> list[str]:
+    def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]:
         if config.provider.name == "vertex":
             return [
                 "Vertex express API key pre-configured (google-vertex options.apiKey)",
                 "No ADC / gcloud auth needed",
             ]
         return ["API key injected via env (no /connect needed)"]
+
+    def docker_args(self, config: RunConfig) -> list[str]:
+        return []
 
 
 def model_id(config: RunConfig) -> str:

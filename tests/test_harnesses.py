@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -8,12 +9,14 @@ import pytest
 from ahl.harnesses import get_adapter
 from ahl.harnesses.agy import AgyAdapter
 from ahl.harnesses.claude import ClaudeAdapter
+from ahl.harnesses.claude_science import ClaudeScienceAdapter
 from ahl.harnesses.gemini import GeminiAdapter
 from ahl.harnesses.opencode import OpenCodeAdapter
 
 
 def test_get_adapter_returns_expected_class():
     assert isinstance(get_adapter("claude"), ClaudeAdapter)
+    assert isinstance(get_adapter("claude-science"), ClaudeScienceAdapter)
     assert isinstance(get_adapter("gemini"), GeminiAdapter)
     assert isinstance(get_adapter("opencode"), OpenCodeAdapter)
     assert isinstance(get_adapter("agy"), AgyAdapter)
@@ -34,10 +37,16 @@ def _mcp_capability(tmp_path: Path):
 
 
 class TestClaudeAdapter:
-    def test_seed_returns_no_volumes(self, make_config, tmp_path: Path):
+    def test_build_env_contains_no_anthropic_key(self, make_config):
+        config = make_config(harness="claude", provider="anthropic", api_key="")
+        assert get_adapter("claude").build_env(config) == {"DISABLE_AUTOUPDATER": "1"}
+
+    def test_seed_mounts_isolated_home(self, make_config, tmp_path: Path):
         config = make_config(harness="claude", provider="anthropic")
         adapter = get_adapter("claude")
-        assert adapter.seed(tmp_path / "run", config) == []
+        run_dir = tmp_path / "run"
+        assert adapter.seed(run_dir, config) == [(run_dir / "claude", "/root/.claude")]
+        assert (run_dir / "claude" / "projects").is_dir()
 
     def test_wire_capabilities_no_skills_is_noop(self, make_config, tmp_path: Path):
         config = make_config(harness="claude", provider="anthropic")
@@ -60,7 +69,7 @@ class TestClaudeAdapter:
         # skill_dir later is reflected without rerunning ahl up (hot reload).
         assert volumes == [(skill_dir, "/workspace/.claude/skills/my-skill")]
 
-    def test_wire_capabilities_copy_install_snapshots_into_run_dir(
+    def test_wire_capabilities_copy_install_is_left_to_delegated_installer(
         self, make_config, tmp_path: Path, skill_dir: Path
     ):
         config = make_config(
@@ -72,9 +81,7 @@ class TestClaudeAdapter:
         adapter = get_adapter("claude")
         volumes = adapter.wire_capabilities(run_dir, config, config.capabilities)
 
-        copied = run_dir / "claude" / "skills" / "my-skill"
-        assert volumes == [(copied, "/workspace/.claude/skills/my-skill")]
-        assert (copied / "SKILL.md").read_text() == (skill_dir / "SKILL.md").read_text()
+        assert volumes == []
 
     def test_wire_capabilities_warns_on_mcp(self, make_config, tmp_path: Path, capsys):
         config = make_config(harness="claude", provider="anthropic")
@@ -82,8 +89,152 @@ class TestClaudeAdapter:
         adapter.wire_capabilities(tmp_path / "run", config, _mcp_capability(tmp_path))
         assert "not wired for harness 'claude'" in capsys.readouterr().err
 
-    def test_parse_trace_returns_none(self, tmp_path: Path):
-        assert get_adapter("claude").parse_trace(tmp_path / "run") is None
+    def test_parse_trace_on_fresh_home_has_no_sessions(self, tmp_path: Path):
+        assert get_adapter("claude").parse_trace(tmp_path / "run")["sessions"] == []
+
+    def test_parse_trace_reads_messages_and_tool_calls(self, make_config, tmp_path: Path):
+        config = make_config(harness="claude", provider="anthropic")
+        run_dir = tmp_path / "run"
+        adapter = get_adapter("claude")
+        adapter.seed(run_dir, config)
+        session_dir = run_dir / "claude" / "projects" / "-workspace"
+        session_dir.mkdir()
+        records = [
+            {
+                "type": "user",
+                "sessionId": "session-1",
+                "cwd": "/workspace",
+                "version": "2.1.0",
+                "timestamp": "2026-07-20T10:00:00Z",
+                "message": {"role": "user", "content": "inspect data.csv"},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "session-1",
+                "timestamp": "2026-07-20T10:00:20Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [
+                        {"type": "text", "text": "I will inspect it."},
+                        {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"file_path": "data.csv"}},
+                    ],
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 30,
+                        "cache_creation_input_tokens": 200,
+                        "cache_read_input_tokens": 50,
+                    },
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "session-1",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "a,b\\n1,2"}
+                    ],
+                },
+            },
+        ]
+        (session_dir / "session-1.jsonl").write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n"
+        )
+
+        trace = adapter.parse_trace(run_dir)
+        assert len(trace["sessions"]) == 1
+        session = trace["sessions"][0]
+        assert session["id"] == "session-1"
+        assert session["summary"]["user_messages"][0] == "inspect data.csv"
+        assert session["summary"]["assistant_messages"] == ["I will inspect it."]
+        assert session["summary"]["tool_calls"] == [
+            {
+                "id": "tool-1",
+                "name": "Read",
+                "args": {"file_path": "data.csv"},
+                "result": "a,b\\n1,2",
+                "is_error": False,
+            }
+        ]
+        # Cost/tokens/time capture (D2): usage summed from message.usage,
+        # wall-clock from record timestamps, model as actually served.
+        assert session["model"] == "claude-opus-4-8"
+        assert session["usage"] == {
+            "input_tokens": 100,
+            "output_tokens": 30,
+            "cache_creation_input_tokens": 200,
+            "cache_read_input_tokens": 50,
+        }
+        assert session["started_at"] == "2026-07-20T10:00:00Z"
+        assert session["ended_at"] == "2026-07-20T10:00:20Z"
+        assert session["wall_clock_seconds"] == 20.0
+        totals = trace["totals"]
+        assert totals["sessions"] == 1
+        assert totals["models"] == ["claude-opus-4-8"]
+        assert totals["usage"]["output_tokens"] == 30
+        assert totals["wall_clock_seconds"] == 20.0
+
+
+class TestClaudeScienceAdapter:
+    def test_seed_mounts_isolated_home_and_writes_config(self, make_config, tmp_path: Path):
+        config = make_config(harness="claude-science", provider="anthropic", api_key="")
+        run_dir = tmp_path / "run"
+        adapter = get_adapter("claude-science")
+        volumes = adapter.seed(run_dir, config)
+
+        home = run_dir / "claude-science" / "home"
+        assert volumes == [(home, "/root/.claude-science")]
+        assert "disable_telemetry = true" in (home / "config.toml").read_text()
+        assert "ANTHROPIC_API_KEY" not in adapter.build_env(config)
+
+    def test_wire_capabilities_packages_uploadable_skill_zip(
+        self, make_config, tmp_path: Path, skill_dir: Path
+    ):
+        config = make_config(
+            harness="claude-science",
+            provider="anthropic",
+            api_key="",
+            capabilities=[{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir)}],
+        )
+        run_dir = tmp_path / "run"
+        adapter = get_adapter("claude-science")
+        assert adapter.wire_capabilities(run_dir, config, config.capabilities) == []
+
+        archive_path = run_dir / "claude-science" / "skill-uploads" / "my-skill.zip"
+        with zipfile.ZipFile(archive_path) as archive:
+            assert "my-skill/SKILL.md" in archive.namelist()
+
+    def test_start_command_and_docker_args_publish_both_loopback_ports(
+        self, make_config
+    ):
+        config = make_config(
+            harness="claude-science",
+            provider="anthropic",
+            api_key="",
+            extra={"harness": {"name": "claude-science", "parameters": {"port": 8765}}},
+        )
+        adapter = get_adapter("claude-science")
+        assert "--port 8765" in adapter.start_command(config)
+        args = adapter.docker_args(config)
+        assert "127.0.0.1:8765:8765" in args
+        assert "127.0.0.1:8766:8766" in args
+        assert "seccomp=unconfined" in args
+        assert "apparmor=unconfined" in args
+
+    def test_dangerously_no_sandbox_is_explicit_opt_in(self, make_config):
+        config = make_config(
+            harness="claude-science",
+            provider="anthropic",
+            api_key="",
+            extra={
+                "harness": {
+                    "name": "claude-science",
+                    "parameters": {"dangerously_no_sandbox": True},
+                }
+            },
+        )
+        assert "--dangerously-no-sandbox" in get_adapter("claude-science").start_command(config)
 
 
 class TestGeminiAdapter:
@@ -98,7 +249,9 @@ class TestGeminiAdapter:
         settings = json.loads((home / "settings.json").read_text())
         assert settings["security"]["auth"]["selectedType"] == "gemini-api-key"
 
-    def test_wire_capabilities_folds_skill_into_global_gemini_md(self, make_config, tmp_path: Path, skill_dir: Path):
+    def test_wire_capabilities_mounts_native_global_skill(
+        self, make_config, tmp_path: Path, skill_dir: Path
+    ):
         config = make_config(
             harness="gemini",
             provider="gemini",
@@ -109,9 +262,7 @@ class TestGeminiAdapter:
         adapter.seed(run_dir, config)
         volumes = adapter.wire_capabilities(run_dir, config, config.capabilities)
 
-        assert volumes == []
-        context = (run_dir / "gemini" / "GEMINI.md").read_text()
-        assert "Do the thing." in context
+        assert volumes == [(skill_dir, "/root/.gemini/skills/my-skill")]
 
     def test_parse_trace_on_freshly_seeded_home_has_no_sessions(self, make_config, tmp_path: Path):
         config = make_config(harness="gemini", provider="gemini")
@@ -159,11 +310,9 @@ class TestOpenCodeAdapter:
         oc_config = json.loads((config_dir / "opencode.json").read_text())
         assert "instructions" not in oc_config
 
-    def test_wire_capabilities_copy_install_snapshots_inside_already_mounted_config_dir(
+    def test_wire_capabilities_copy_install_is_left_to_delegated_installer(
         self, make_config, tmp_path: Path, skill_dir: Path
     ):
-        # install: copy lands inside config_dir, which seed() already mounts
-        # as a whole — so no extra volume is needed for the copy to be visible.
         config = make_config(
             harness="opencode",
             provider="anthropic",
@@ -175,9 +324,6 @@ class TestOpenCodeAdapter:
         volumes = adapter.wire_capabilities(run_dir, config, config.capabilities)
 
         assert volumes == []
-        config_dir = run_dir / "opencode" / "config"
-        copied = config_dir / "skills" / "my-skill" / "SKILL.md"
-        assert copied.read_text() == (skill_dir / "SKILL.md").read_text()
 
     def test_parse_trace_reports_log_files(self, make_config, tmp_path: Path):
         config = make_config(harness="opencode", provider="anthropic")
@@ -256,7 +402,9 @@ def _write_fake_opencode_db(db_path: Path) -> None:
 
 
 class TestAgyAdapter:
-    def test_wire_capabilities_warns_and_noops(self, make_config, tmp_path: Path, skill_dir: Path, capsys):
+    def test_wire_capabilities_mounts_native_global_skill(
+        self, make_config, tmp_path: Path, skill_dir: Path
+    ):
         config = make_config(
             harness="agy",
             provider="gemini",
@@ -265,5 +413,6 @@ class TestAgyAdapter:
         adapter = get_adapter("agy")
         volumes = adapter.wire_capabilities(tmp_path / "run", config, config.capabilities)
 
-        assert volumes == []
-        assert "not supported on harness 'agy'" in capsys.readouterr().err
+        assert volumes == [
+            (skill_dir, "/root/.gemini/antigravity-cli/skills/my-skill")
+        ]

@@ -15,7 +15,11 @@ if TYPE_CHECKING:
     from ahl.workspace import Workspace
 
 
-SUPPORTED_HARNESSES = {"claude", "opencode", "agy", "gemini"}
+SUPPORTED_HARNESSES = {"claude", "claude-science", "opencode", "agy", "gemini"}
+
+# These harnesses authenticate interactively with a Claude account. They must
+# neither require nor receive an Anthropic API key.
+ACCOUNT_LOGIN_HARNESSES = {"claude", "claude-science"}
 
 # Provider name -> host env var holding the real API key (read from .env).
 PROVIDER_KEY_ENV = {
@@ -89,8 +93,14 @@ def load_config(config_path: Path) -> RunConfig:
     model_raw = raw.get("model")
     model = _parse_named(model_raw, "model") if model_raw is not None else Named("", {})
 
+    if harness.name in ACCOUNT_LOGIN_HARNESSES and provider.name != "anthropic":
+        raise ConfigError(
+            f"Harness '{harness.name}' authenticates with a Claude account and requires "
+            "provider: anthropic"
+        )
+
     key_env = PROVIDER_KEY_ENV[provider.name]
-    if not os.getenv(key_env):
+    if harness.name not in ACCOUNT_LOGIN_HARNESSES and not os.getenv(key_env):
         raise ConfigError(
             f"Missing API key env {key_env}. Add it to {root / '.env'} or your shell."
         )

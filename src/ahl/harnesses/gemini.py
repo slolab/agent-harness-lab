@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ahl.capabilities import Capability, render_skill_fallback
+from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
-from ahl.harnesses.base import Volumes, google_env, warn_unsupported_mcp
+from ahl.harnesses.base import Volumes, google_env, native_skill_mount, warn_unsupported_mcp
 
 CONTAINER_GEMINI_HOME = "/root/.gemini"
+CONTAINER_GEMINI_SKILLS = f"{CONTAINER_GEMINI_HOME}/skills"
 CONTAINER_WORKSPACE = "/workspace"
 WORKSPACE_TMP = "tmp/workspace"
 
@@ -34,15 +35,11 @@ class GeminiAdapter:
 
     def wire_capabilities(self, run_dir: Path, config: RunConfig, capabilities: list[Capability]) -> Volumes:
         warn_unsupported_mcp("gemini", capabilities)
-        skills = [c for c in capabilities if c.kind == "skill"]
-        if not skills:
-            return []
-        home = self._home(run_dir)
-        # Gemini CLI always loads a global ~/.gemini/GEMINI.md context file,
-        # regardless of project — no extra mount needed, home is already mounted.
-        sections = [render_skill_fallback(skill.path) for skill in skills if skill.path]
-        (home / "GEMINI.md").write_text("\n\n".join(sections) + "\n")
-        return []
+        return [
+            (skill.path, native_skill_mount(skill, CONTAINER_GEMINI_SKILLS))
+            for skill in capabilities
+            if skill.kind == "skill" and skill.install == "mount" and skill.path is not None
+        ]
 
     def parse_trace(self, run_dir: Path) -> dict[str, Any] | None:
         return _parse_trace(self._home(run_dir))
@@ -51,10 +48,13 @@ class GeminiAdapter:
         base = "gemini --skip-trust"
         return f"{base} -m {config.model.name}" if config.model.name else base
 
-    def start_hints(self, config: RunConfig) -> list[str]:
+    def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]:
         auth = AUTH_TYPE.get(config.provider.name)
         if auth:
             return [f"Auth pre-configured as {auth} in ~/.gemini/settings.json"]
+        return []
+
+    def docker_args(self, config: RunConfig) -> list[str]:
         return []
 
 

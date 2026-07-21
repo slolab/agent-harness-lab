@@ -8,17 +8,18 @@ from typing import Any
 
 from ahl.config import ConfigError
 
-KINDS = {"skill", "mcp"}
-INSTALL_MODES = {"mount", "copy", "pip"}
+KINDS = {"skill", "mcp", "plugin"}
+INSTALL_MODES = {"mount", "copy", "npx", "pip"}
 
 # install: mount  -> bind-mount the bundle straight from its host path (hot reload —
 #                     edits on the host show up in the container immediately).
-# install: copy   -> snapshot the bundle into the run dir once, at `ahl up` time.
+# install: copy   -> install a local bundle through `npx skills` at container start.
+# install: npx    -> resolve and install a remote skill through `npx skills`.
 # install: pip    -> mcp only; pip-install the package into the harness image.
-# Marketplace/git/url installs are deferred — not implemented, not validated here.
 INSTALL_MODES_BY_KIND = {
-    "skill": {"mount", "copy"},
+    "skill": {"mount", "copy", "npx"},
     "mcp": {"mount", "pip"},
+    "plugin": {"mount", "copy"},
 }
 
 
@@ -28,6 +29,7 @@ class Capability:
     name: str
     install: str
     path: Path | None = None
+    source: str | None = None
     command: str | None = None
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
@@ -39,7 +41,50 @@ def parse_capabilities(raw: Any, root: Path) -> list[Capability]:
         return []
     if not isinstance(raw, list):
         raise ConfigError("'capabilities' must be a list")
-    return [_parse_capability(item, root) for item in raw]
+    caps: list[Capability] = []
+    for item in raw:
+        if isinstance(item, dict) and item.get("kind") == "plugin":
+            caps.extend(_expand_plugin(item, root))
+        else:
+            caps.append(_parse_capability(item, root))
+    return caps
+
+
+def _expand_plugin(item: dict, root: Path) -> list[Capability]:
+    """Expand a Claude Code plugin into one skill Capability per bundled skill.
+
+    A plugin (`.claude-plugin/plugin.json` + `skills/<name>/SKILL.md`) ships a
+    whole skill set, so referencing it once is the correct unit — cherry-picking
+    individual skills out of it is not. Expansion happens here at parse time, so
+    every harness's existing skill wiring handles the result unchanged.
+    """
+    name = item.get("name")
+    if not isinstance(name, str) or not name:
+        raise ConfigError("plugin entry missing required 'name'")
+    install = item.get("install")
+    if install not in INSTALL_MODES_BY_KIND["plugin"]:
+        raise ConfigError(
+            f"plugin '{name}': 'install' must be one of "
+            f"{sorted(INSTALL_MODES_BY_KIND['plugin'])}"
+        )
+    raw_path = item.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ConfigError(f"plugin '{name}': install: {install} requires 'path'")
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    path = path.resolve()
+    if not (path / ".claude-plugin" / "plugin.json").is_file():
+        raise ConfigError(f"plugin '{name}': no .claude-plugin/plugin.json at {path}")
+    skills_dir = path / "skills"
+    skills = sorted(d for d in skills_dir.iterdir() if (d / "SKILL.md").is_file()) \
+        if skills_dir.is_dir() else []
+    if not skills:
+        raise ConfigError(f"plugin '{name}': no skills/<name>/SKILL.md found under {path}")
+    return [
+        Capability(kind="skill", name=skill.name, install=install, path=skill)
+        for skill in skills
+    ]
 
 
 def _parse_capability(item: Any, root: Path) -> Capability:
@@ -76,6 +121,12 @@ def _parse_capability(item: Any, root: Path) -> Capability:
         if not path.is_dir():
             raise ConfigError(f"capability '{name}': path does not exist or is not a directory: {path}")
 
+    source = item.get("source")
+    if source is not None and (not isinstance(source, str) or not source):
+        raise ConfigError(f"capability '{name}': 'source' must be a non-empty string")
+    if install == "npx" and source is None:
+        raise ConfigError(f"capability '{name}': install: npx requires 'source'")
+
     command = item.get("command")
     if command is not None and not isinstance(command, str):
         raise ConfigError(f"capability '{name}': 'command' must be a string")
@@ -97,19 +148,9 @@ def _parse_capability(item: Any, root: Path) -> Capability:
         name=name,
         install=install,
         path=path,
+        source=source,
         command=command,
         args=args,
         env=env,
         version=version,
     )
-
-
-def render_skill_fallback(skill_dir: Path) -> str:
-    """Render a skill's SKILL.md for folding into a harness's context file.
-
-    Used by harnesses with no native skill concept (gemini, opencode, agy).
-    """
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.is_file():
-        raise ConfigError(f"skill capability path has no SKILL.md: {skill_dir}")
-    return skill_md.read_text()

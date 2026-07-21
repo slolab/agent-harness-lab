@@ -5,6 +5,7 @@ from __future__ import annotations
 from ahl.harnesses.agy import AgyAdapter
 from ahl.harnesses.base import HarnessAdapter
 from ahl.harnesses.claude import ClaudeAdapter
+from ahl.harnesses.claude_science import ClaudeScienceAdapter
 from ahl.harnesses.gemini import GeminiAdapter
 from ahl.harnesses.opencode import OpenCodeAdapter
 
@@ -12,6 +13,7 @@ _ADAPTERS: dict[str, HarnessAdapter] = {
     "gemini": GeminiAdapter(),
     "opencode": OpenCodeAdapter(),
     "claude": ClaudeAdapter(),
+    "claude-science": ClaudeScienceAdapter(),
     "agy": AgyAdapter(),
 }
 

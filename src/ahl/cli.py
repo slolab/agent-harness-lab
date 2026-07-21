@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -14,6 +15,7 @@ from ahl.config import ConfigError, RunConfig, load_config
 from ahl.docker import CONTAINER_WORKSPACE, docker_run_args, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
 from ahl.packages import PackageCopy, wire_packages
+from ahl.skills import wire_delegated_skills
 from ahl.workspace import resolve_workspace
 
 app = typer.Typer(no_args_is_help=True)
@@ -42,9 +44,9 @@ def up(
 ) -> None:
     """Launch the configured harness in a container shell.
 
-    Builds the image, injects the real provider key, then drops you into an
-    interactive shell in the sandbox. Drive the harness by hand; inspect the
-    harness's own logs in the workspace afterwards.
+    Builds the image, configures harness authentication, then drops you into
+    an interactive shell in the sandbox. Drive the harness by hand; inspect
+    the harness's own logs in the workspace afterwards.
 
     `--resume <name>` continues a previous run in its existing `runs/<name>/`
     directory instead of starting fresh: the workspace and harness home/config
@@ -59,6 +61,11 @@ def up(
         run_config = load_config(config)
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+    # Docker Desktop treats non-zero `docker run` exits (e.g. shell exit after
+    # Ctrl-C → status 130) as "container errors" and prints Gordon tips.
+    os.environ.setdefault("DOCKER_CLI_HINTS", "false")
+    _ensure_docker()
 
     if resume:
         run_id = resume
@@ -91,8 +98,17 @@ def up(
     try:
         extra_volumes = adapter.seed(run_dir, run_config)
         readonly_volumes = adapter.wire_capabilities(run_dir, run_config, run_config.capabilities)
-        package_volumes, package_copies, setup_commands = wire_packages(run_dir, run_config.packages)
+        skill_volumes, skill_commands = wire_delegated_skills(
+            run_config.harness.name,
+            run_config.capabilities,
+        )
+        package_volumes, package_copies, package_commands = wire_packages(
+            run_dir,
+            run_config.packages,
+        )
+        readonly_volumes += skill_volumes
         readonly_volumes += package_volumes
+        setup_commands = skill_commands + package_commands
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -107,6 +123,7 @@ def up(
         setup_commands=None if use_copy_flow else setup_commands,
         detached=use_copy_flow,
         hold=use_copy_flow,
+        extra_args=adapter.docker_args(run_config),
     )
 
     _write_session(run_dir, run_config, run_id, workspace_dir, resumed=bool(resume))
@@ -130,7 +147,7 @@ def up(
     for cmd in setup_commands:
         typer.echo(f"Setup: {cmd}")
     typer.echo(f"Start the harness inside the shell with:\n  {adapter.start_command(run_config)}")
-    for hint in adapter.start_hints(run_config):
+    for hint in adapter.start_hints(run_dir, run_config):
         typer.echo(f"  ({hint})")
     typer.echo("Exit the shell to stop.")
 
@@ -156,35 +173,119 @@ def _run_with_copied_packages(
     setup_commands: list[str],
 ) -> None:
     """Start detached, docker cp packages in, setup, then interactive bash."""
-    subprocess.run(run_args, check=True)
     try:
-        for copy in package_copies:
-            subprocess.run(
-                ["docker", "exec", container_name, "mkdir", "-p", copy.container_path],
-                check=True,
-            )
-            subprocess.run(
-                ["docker", "cp", f"{copy.host_path}/.", f"{container_name}:{copy.container_path}/"],
-                check=True,
-            )
-        if setup_commands:
-            subprocess.run(
-                ["docker", "exec", container_name, "sh", "-c", " && ".join(setup_commands)],
-                check=True,
-            )
-        subprocess.run(["docker", "exec", "-it", container_name, "bash"], check=False)
-    finally:
-        subprocess.run(["docker", "rm", "-f", container_name], check=False)
+        subprocess.run(run_args, check=True)
+        try:
+            for copy in package_copies:
+                subprocess.run(
+                    ["docker", "exec", container_name, "mkdir", "-p", copy.container_path],
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "docker",
+                        "cp",
+                        f"{copy.host_path}/.",
+                        f"{container_name}:{copy.container_path}/",
+                    ],
+                    check=True,
+                )
+            if setup_commands:
+                subprocess.run(
+                    ["docker", "exec", container_name, "sh", "-c", " && ".join(setup_commands)],
+                    check=True,
+                )
+            subprocess.run(["docker", "exec", "-it", container_name, "bash"], check=False)
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name], check=False)
+    except FileNotFoundError:
+        _fail_docker_missing()
+    except subprocess.CalledProcessError as exc:
+        _fail_docker_command(exc)
 
 
 def _build_image(config: RunConfig) -> None:
     image = image_name(config.harness.name)
     dockerfile = dockerfile_path(config.root, config.harness.name)
     typer.echo(f"Building {image} from {dockerfile}")
-    subprocess.run(
-        ["docker", "build", "-t", image, "-f", str(dockerfile), str(config.root / "docker")],
-        check=True,
+    try:
+        subprocess.run(
+            ["docker", "build", "-t", image, "-f", str(dockerfile), str(config.root / "docker")],
+            check=True,
+        )
+    except FileNotFoundError:
+        _fail_docker_missing()
+    except subprocess.CalledProcessError as exc:
+        _fail_docker_command(exc)
+
+
+_DOCKER_MISSING = "Docker CLI not found on PATH. Install Docker and retry."
+_DOCKER_UNREACHABLE = (
+    "Cannot reach the Docker daemon. Is Docker Desktop (or the docker service) running?"
+)
+
+
+def _docker_daemon_unreachable(text: str) -> bool:
+    lower = text.lower()
+    return any(
+        needle in lower
+        for needle in (
+            "cannot connect to the docker daemon",
+            "failed to connect to the docker api",
+            "is the docker daemon running",
+        )
     )
+
+
+def _ensure_docker() -> None:
+    """Fail fast with a clear message when Docker isn't usable."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        _fail_docker_missing()
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            typer.echo(detail, err=True)
+        typer.secho(_DOCKER_UNREACHABLE, fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+
+def _fail_docker_missing() -> NoReturn:
+    typer.secho(_DOCKER_MISSING, fg=typer.colors.RED, err=True)
+    raise typer.Exit(1)
+
+
+def _fail_docker_command(exc: subprocess.CalledProcessError) -> NoReturn:
+    """Exit without a Python traceback after a docker subprocess failure.
+
+    Docker already printed its own error to stderr; add a short hint when the
+    failure looks like a stopped daemon, otherwise a one-line summary.
+    """
+    combined = "\n".join(
+        part.decode(errors="replace") if isinstance(part, bytes) else part
+        for part in (exc.stderr, exc.stdout)
+        if part
+    )
+    if _docker_daemon_unreachable(combined):
+        typer.secho(_DOCKER_UNREACHABLE, fg=typer.colors.RED, err=True)
+    else:
+        cmd = (
+            " ".join(str(a) for a in exc.cmd)
+            if isinstance(exc.cmd, (list, tuple))
+            else str(exc.cmd)
+        )
+        typer.secho(
+            f"Docker command failed (exit {exc.returncode}): {cmd}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+    raise typer.Exit(exc.returncode) from None
 
 
 def _check_resumable(run_dir: Path, config: RunConfig) -> None:

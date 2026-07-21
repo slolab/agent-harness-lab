@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+ARG NODE_VERSION=22.20.0
 ARG UV_VERSION=latest
 
 FROM debian:bookworm-slim AS build
@@ -13,12 +14,13 @@ RUN set -eux; \
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-FROM debian:bookworm-slim AS runtime
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bsdextrautils \
         ca-certificates \
+        git \
         iproute2 \
         iptables \
         python3 \

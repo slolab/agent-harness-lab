@@ -5,7 +5,7 @@
 # name or a {name, parameters} mapping — see "Other harness/provider
 # combinations" at the bottom for worked examples.
 
-harness: gemini       # gemini | opencode | agy | claude
+harness: gemini       # gemini | opencode | agy | claude | claude-science
 provider: gemini      # anthropic | openai | gemini | vertex
 model: gemini-3.5-flash
 
@@ -35,22 +35,35 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 # --- Capabilities: skills/MCP servers preinstalled into the harness ----
 # See docs/capability-format.md for what a bundle looks like.
 #
-# Skill discovery: claude and opencode read `skills/<name>/SKILL.md`
-# natively (.claude/skills/, ~/.config/opencode/skills/ — see
-# https://opencode.ai/docs/skills/). gemini has no native skill concept,
-# so its SKILL.md is folded into the global ~/.gemini/GEMINI.md instead.
+# Skill discovery is native for claude, gemini, opencode, and agy. AHL maps
+# local mount-mode skills directly into each harness's native skill directory.
+# All other skill installs are delegated to `npx skills`, globally and
+# non-interactively, with the installer agent inferred from `harness`.
+# Claude Science currently exposes custom skill installation only in its UI;
+# AHL prepares uploadable ZIPs and prints the one required manual upload step.
 # MCP wiring isn't implemented yet (parsed, but skipped with a warning).
 #
-# `install` — mount: bind-mount live from `path` (hot reload, no `ahl up`
-# restart needed) | copy: snapshot `path` once at `ahl up` time (pins the
-# exact version a run used). Either way the skill is mounted read-only —
-# the agent can use it but never write back into your checkout.
+# `install: mount` — bind-mount a local `path` read-only for hot reload.
+# `install: copy` — pass a local `path` to `npx skills`; the installed copy
+# is writable and does not reflect later host edits.
+# `install: npx` — resolve `source` remotely and install the named skill.
 
 # capabilities:
+#   # Local hot reload:
 #   - kind: skill
 #     name: biotope
 #     install: mount
 #     path: /absolute/or/repo-relative/path/to/biotope_by_claude
+#   # Local snapshot through npx skills:
+#   - kind: skill
+#     name: biotope
+#     install: copy
+#     path: /absolute/or/repo-relative/path/to/biotope_by_claude
+#   # Remote skill through npx skills:
+#   - kind: skill
+#     name: web-design-guidelines
+#     install: npx
+#     source: vercel-labs/agent-skills
 
 # --- Packages: local (not-yet-published) Python checkouts to preinstall --
 # For a CLI or library a skill depends on that's still being developed
@@ -91,10 +104,19 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #   harness: agy
 #   provider: {name: vertex, parameters: {project: ..., location: global}}
 #
-# Claude Code (Anthropic):
+# Claude Code (Claude-account login; no API key):
 #   harness: claude
 #   provider: anthropic
-#   model: claude-sonnet-4-6
+#   # omit model to use the plan default; or set an explicit Claude model
+#
+# Claude Science (x64 glibc Linux only; Claude-account login; no API key):
+#   harness:
+#     name: claude-science
+#     parameters:
+#       port: 8000
+#       # dangerously_no_sandbox: true  # fallback only if nested bwrap fails
+#   provider: anthropic
+#   # model is selected by the signed-in plan/app, not this config
 #
 # OpenCode (multi-provider; model as provider/model or bare name):
 #   harness: opencode

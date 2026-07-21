@@ -9,7 +9,6 @@ capability bundles (skills/MCP) into it, and parse its native logs back out.
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Protocol
@@ -25,7 +24,8 @@ class HarnessAdapter(Protocol):
     def wire_capabilities(self, run_dir: Path, config: RunConfig, capabilities: list[Capability]) -> Volumes: ...
     def parse_trace(self, run_dir: Path) -> dict[str, Any] | None: ...
     def start_command(self, config: RunConfig) -> str: ...
-    def start_hints(self, config: RunConfig) -> list[str]: ...
+    def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]: ...
+    def docker_args(self, config: RunConfig) -> list[str]: ...
 
 
 def provider_key(config: RunConfig) -> str:
@@ -47,18 +47,6 @@ def google_env(config: RunConfig) -> dict[str, str]:
     if config.model.name:
         env["GEMINI_MODEL"] = config.model.name
     return env
-
-
-def copy_skill_bundle(skill: Capability, dest_dir: Path) -> Path:
-    """Snapshot a skill bundle into dest_dir/<name>/ (install: copy). Returns the copy's path."""
-    dest = dest_dir / skill.name
-    if dest.exists():
-        shutil.rmtree(dest)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(skill.path, dest)
-    return dest
-
-
 def native_skill_mount(skill: Capability, container_skills_dir: str) -> str:
     """Container path a skill should be visible at, under a harness's native skills dir."""
     return f"{container_skills_dir}/{skill.name}"

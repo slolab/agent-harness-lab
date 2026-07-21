@@ -42,6 +42,7 @@ def docker_run_args(
     setup_commands: list[str] | None = None,
     detached: bool = False,
     hold: bool = False,
+    extra_args: list[str] | None = None,
 ) -> list[str]:
     """Assemble the `docker run` invocation.
 
@@ -73,6 +74,7 @@ def docker_run_args(
         args.append("-d")
     else:
         args.append("-it")
+    args.extend(extra_args or [])
     args.extend(
         [
             "-v",
