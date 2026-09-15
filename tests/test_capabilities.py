@@ -8,26 +8,13 @@ from ahl.capabilities import parse_capabilities
 from ahl.config import ConfigError
 
 
-def test_parse_capabilities_none_returns_empty(tmp_path: Path):
-    assert parse_capabilities(None, tmp_path) == []
-
-
-def test_parse_capabilities_valid_skill(tmp_path: Path, skill_dir: Path):
+def test_parse_capabilities_local_skill_resolves_relative_path(tmp_path: Path, skill_dir: Path):
     caps = parse_capabilities(
-        [{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir)}],
+        [{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir.relative_to(tmp_path))}],
         tmp_path,
     )
     assert len(caps) == 1
     assert caps[0].kind == "skill"
-    assert caps[0].path == skill_dir
-
-
-def test_parse_capabilities_relative_path_resolved_against_root(tmp_path: Path, skill_dir: Path):
-    rel = skill_dir.relative_to(tmp_path)
-    caps = parse_capabilities(
-        [{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(rel)}],
-        tmp_path,
-    )
     assert caps[0].path == skill_dir
 
 

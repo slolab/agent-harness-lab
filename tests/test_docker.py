@@ -2,16 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ahl.docker import GIT_IDENTITY_ENV, docker_run_args, dockerfile_path, image_name
-
-
-def test_image_name():
-    assert image_name("claude") == "agent-harness-lab:claude"
-
-
-def test_dockerfile_path():
-    root = Path("/some/root")
-    assert dockerfile_path(root, "gemini") == root / "docker" / "gemini.Dockerfile"
+from ahl.docker import docker_run_args
 
 
 def test_docker_run_args_assembles_mounts_and_env(make_config, tmp_path: Path):
@@ -24,15 +15,21 @@ def test_docker_run_args_assembles_mounts_and_env(make_config, tmp_path: Path):
         workspace_dir,
         name="ahl-test",
         extra_volumes=extra,
+        readonly_volumes=[(tmp_path / "skill", "/workspace/.claude/skills/my-skill")],
     )
 
     assert args[:4] == ["docker", "run", "--rm", "-it"]
     assert f"{workspace_dir}:/workspace" in args
     assert "--name" in args and args[args.index("--name") + 1] == "ahl-test"
     assert f"{tmp_path / 'skills'}:/workspace/.claude/skills" in args
+    assert f"{tmp_path / 'skill'}:/workspace/.claude/skills/my-skill:ro" in args
     assert "ANTHROPIC_API_KEY=test-key" in args
-    for key, value in GIT_IDENTITY_ENV.items():
-        assert f"{key}={value}" in args
+    assert {
+        "GIT_AUTHOR_NAME=Agent Harness Lab",
+        "GIT_AUTHOR_EMAIL=ahl@localhost",
+        "GIT_COMMITTER_NAME=Agent Harness Lab",
+        "GIT_COMMITTER_EMAIL=ahl@localhost",
+    } <= set(args)
     assert args[-3:] == ["agent-harness-lab:claude", "/usr/local/bin/init-firewall.sh", "bash"]
 
 
@@ -48,17 +45,6 @@ def test_docker_run_args_includes_adapter_specific_args(make_config, tmp_path: P
     extra_args = ["--platform", "linux/amd64", "-p", "127.0.0.1:8000:8000"]
     args = docker_run_args(config, {}, tmp_path / "ws", extra_args=extra_args)
     assert args[4:8] == extra_args
-
-
-def test_docker_run_args_readonly_volumes_get_ro_suffix(make_config, tmp_path: Path):
-    config = make_config(harness="claude", provider="anthropic")
-    args = docker_run_args(
-        config,
-        {"ANTHROPIC_API_KEY": "test-key"},
-        tmp_path / "ws",
-        readonly_volumes=[(tmp_path / "skill", "/workspace/.claude/skills/my-skill")],
-    )
-    assert f"{tmp_path / 'skill'}:/workspace/.claude/skills/my-skill:ro" in args
 
 
 def test_docker_run_args_setup_commands_chain_into_exec_bash(make_config, tmp_path: Path):

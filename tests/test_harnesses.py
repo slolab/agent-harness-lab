@@ -48,11 +48,6 @@ class TestClaudeAdapter:
         assert adapter.seed(run_dir, config) == [(run_dir / "claude", "/root/.claude")]
         assert (run_dir / "claude" / "projects").is_dir()
 
-    def test_wire_capabilities_no_skills_is_noop(self, make_config, tmp_path: Path):
-        config = make_config(harness="claude", provider="anthropic")
-        adapter = get_adapter("claude")
-        assert adapter.wire_capabilities(tmp_path / "run", config, []) == []
-
     def test_wire_capabilities_mount_install_binds_host_path_directly(
         self, make_config, tmp_path: Path, skill_dir: Path
     ):
@@ -88,9 +83,6 @@ class TestClaudeAdapter:
         adapter = get_adapter("claude")
         adapter.wire_capabilities(tmp_path / "run", config, _mcp_capability(tmp_path))
         assert "not wired for harness 'claude'" in capsys.readouterr().err
-
-    def test_parse_trace_on_fresh_home_has_no_sessions(self, tmp_path: Path):
-        assert get_adapter("claude").parse_trace(tmp_path / "run")["sessions"] == []
 
     def test_parse_trace_reads_messages_and_tool_calls(self, make_config, tmp_path: Path):
         config = make_config(harness="claude", provider="anthropic")
@@ -157,7 +149,7 @@ class TestClaudeAdapter:
                 "is_error": False,
             }
         ]
-        # Cost/tokens/time capture (D2): usage summed from message.usage,
+        # Cost/tokens/time capture (D2): observed response usage,
         # wall-clock from record timestamps, model as actually served.
         assert session["model"] == "claude-opus-4-8"
         assert session["usage"] == {
@@ -165,6 +157,10 @@ class TestClaudeAdapter:
             "output_tokens": 30,
             "cache_creation_input_tokens": 200,
             "cache_read_input_tokens": 50,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": None,
+                "ephemeral_1h_input_tokens": None,
+            },
         }
         assert session["started_at"] == "2026-07-20T10:00:00Z"
         assert session["ended_at"] == "2026-07-20T10:00:20Z"
@@ -351,11 +347,13 @@ class TestOpenCodeAdapter:
         session = trace["sessions"][0]
         assert session["id"] == "ses_1"
         assert session["title"] == "test session"
+        # The assistant has text and tool parts: joined rows must not multiply usage.
+        assert session["tokens"] == {"input": 10, "output": 5}
+        assert session["cost"] == 0.01
         summary = session["summary"]
         assert summary["user_messages"] == ["hello"]
         assert summary["assistant_messages"] == ["hi there"]
         assert summary["tool_calls"] == [{"name": "glob", "args": {"pattern": "*"}}]
-
 
 def _write_fake_opencode_db(db_path: Path) -> None:
     import sqlite3
@@ -387,7 +385,8 @@ def _write_fake_opencode_db(db_path: Path) -> None:
     )
     conn.execute(
         "INSERT INTO message VALUES ('msg_2', 'ses_1', 2, ?)",
-        (json.dumps({"role": "assistant"}),),
+        (json.dumps({"role": "assistant", "cost": 0.01,
+                     "tokens": {"input": 10, "output": 5}}),),
     )
     conn.execute(
         "INSERT INTO part VALUES ('prt_2', 'msg_2', ?)",

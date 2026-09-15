@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,14 +20,31 @@ CONTAINER_CLAUDE_HOME = "/root/.claude"
 CONTAINER_WORKSPACE_SKILLS = "/workspace/.claude/skills"
 
 # Token fields Claude Code records under `message.usage` on assistant records.
-# Kept as an explicit list so the aggregate is stable even if the harness adds
-# new usage keys we don't want to sum (e.g. nested `cache_creation`, `speed`).
+# Keep base counters separate from the cache lifetime breakdown, which must
+# never be added to the cache_creation_input_tokens total a second time.
 USAGE_FIELDS = (
     "input_tokens",
     "output_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
+CACHE_USAGE_FIELDS = ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+
+
+@dataclass
+class _ResponseUsage:
+    # Absent keys are unknown; a recorded zero is valid evidence.
+    counters: dict[str, int] = field(default_factory=dict)
+    terminal: bool = False
+
+    def merge(self, other: _ResponseUsage) -> None:
+        for name, value in other.counters.items():
+            self.counters[name] = max(self.counters.get(name, 0), value)
+        self.terminal |= other.terminal
+
+
+_ResponseId = tuple[str, str] | tuple[str, str, int]
+_ResponseLedger = dict[_ResponseId, _ResponseUsage]
 
 
 class ClaudeAdapter:
@@ -81,21 +99,27 @@ class ClaudeAdapter:
 
 def _parse_trace(home: Path) -> dict[str, Any]:
     session_files = sorted((home / "projects").glob("**/*.jsonl"))
-    sessions = [_parse_session(path) for path in session_files]
-    sessions = [session for session in sessions if session is not None]
+    sessions = []
+    responses: _ResponseLedger = {}
+    for path in session_files:
+        parsed = _parse_session(path, str(path.relative_to(home)))
+        if parsed is None:
+            continue
+        session, session_responses = parsed
+        sessions.append(session)
+        for identity, usage in session_responses.items():
+            responses.setdefault(identity, _ResponseUsage()).merge(usage)
     return {
         "paths": {"home": str(home), "projects": str(home / "projects")},
         "sessions": sessions,
-        "totals": _trace_totals(sessions),
+        "totals": _trace_totals(sessions, responses),
     }
 
 
-def _trace_totals(sessions: list[dict[str, Any]]) -> dict[str, Any]:
-    """Roll session usage/timing up to the run level for cost/time reporting."""
-    usage = dict.fromkeys(USAGE_FIELDS, 0)
-    for session in sessions:
-        for field in USAGE_FIELDS:
-            usage[field] += session.get("usage", {}).get(field, 0)
+def _trace_totals(
+    sessions: list[dict[str, Any]], responses: _ResponseLedger,
+) -> dict[str, Any]:
+    """Summarize the response union: session histories can overlap after forks."""
     starts = sorted(s["started_at"] for s in sessions if s.get("started_at"))
     ends = sorted(s["ended_at"] for s in sessions if s.get("ended_at"))
     started_at = starts[0] if starts else None
@@ -103,23 +127,27 @@ def _trace_totals(sessions: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "sessions": len(sessions),
         "models": sorted({s["model"] for s in sessions if s.get("model")}),
-        "usage": usage,
+        **_usage_summary(responses),
         "started_at": started_at,
         "ended_at": ended_at,
         "wall_clock_seconds": _wall_clock_seconds(started_at, ended_at),
     }
 
 
-def _parse_session(path: Path) -> dict[str, Any] | None:
+def _parse_session(
+    path: Path, source: str,
+) -> tuple[dict[str, Any], _ResponseLedger] | None:
     records: list[dict[str, Any]] = []
+    responses: _ResponseLedger = {}
     try:
-        for line in path.read_text().splitlines():
+        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
             if isinstance(record, dict):
                 records.append(record)
+                _record_usage(responses, record, source, line_number)
     except OSError:
         return None
 
@@ -185,7 +213,7 @@ def _parse_session(path: Path) -> dict[str, Any] | None:
         "ended_at": ended_at,
         "wall_clock_seconds": _wall_clock_seconds(started_at, ended_at),
         "record_count": len(records),
-        "usage": _aggregate_usage(records),
+        **_usage_summary(responses),
         "messages": messages,
         "summary": {
             "user_messages": [m["text"] for m in messages if m["role"] == "user" and m["text"]],
@@ -194,7 +222,7 @@ def _parse_session(path: Path) -> dict[str, Any] | None:
             ],
             "tool_calls": tool_calls,
         },
-    }
+    }, responses
 
 
 def _session_model(records: list[dict[str, Any]]) -> str | None:
@@ -206,25 +234,63 @@ def _session_model(records: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _aggregate_usage(records: list[dict[str, Any]]) -> dict[str, int]:
-    """Sum Claude's per-turn token usage across a session's assistant records.
+def _record_usage(
+    responses: _ResponseLedger, record: dict[str, Any], source: str, line_number: int,
+) -> None:
+    """Reconcile cumulative snapshots, including late updates and early replays."""
+    message = record.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return
+    if record.get("isApiErrorMessage") is True:
+        return
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return
 
-    Claude Code writes `message.usage` on assistant records; there is no cost
-    field, so downstream callers compute a notional cost from these tokens.
-    """
-    totals = dict.fromkeys(USAGE_FIELDS, 0)
-    for record in records:
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue
-        usage = message.get("usage")
-        if not isinstance(usage, dict):
-            continue
-        for field in USAGE_FIELDS:
-            value = usage.get(field)
-            if isinstance(value, int):
-                totals[field] += value
-    return totals
+    message_id, uuid = message.get("id"), record.get("uuid")
+    identity: _ResponseId
+    if isinstance(message_id, str) and message_id:
+        identity = ("message", message_id)
+    elif isinstance(uuid, str) and uuid:
+        identity = ("uuid", uuid)
+    else:
+        identity = ("source", source, line_number)
+
+    cache = usage.get("cache_creation")
+    if not isinstance(cache, dict):
+        cache = {}
+    counters = {}
+    for fields, values in ((USAGE_FIELDS, usage), (CACHE_USAGE_FIELDS, cache)):
+        for name in fields:
+            value = values.get(name)
+            if type(value) is int and value >= 0:
+                counters[name] = value
+    stop_reason = message.get("stop_reason")
+    snapshot = _ResponseUsage(counters, isinstance(stop_reason, str) and bool(stop_reason))
+    responses.setdefault(identity, _ResponseUsage()).merge(snapshot)
+
+
+def _usage_summary(responses: _ResponseLedger) -> dict[str, Any]:
+    """Report known base usage; retain unknown cache lifetime buckets as null."""
+    usage: dict[str, Any] = {
+        name: sum(response.counters.get(name, 0) for response in responses.values())
+        for name in USAGE_FIELDS
+    }
+    usage["cache_creation"] = {
+        name: (
+            sum(response.counters[name] for response in responses.values())
+            if all(name in response.counters for response in responses.values()) else None
+        )
+        for name in CACHE_USAGE_FIELDS
+    }
+    return {
+        "usage": usage,
+        "api_responses": len(responses),
+        "incomplete_api_responses": sum(
+            not response.terminal or any(name not in response.counters for name in USAGE_FIELDS)
+            for response in responses.values()
+        ),
+    }
 
 
 def _wall_clock_seconds(started_at: str | None, ended_at: str | None) -> float | None:

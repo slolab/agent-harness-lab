@@ -106,6 +106,9 @@ on exit (sessions, messages, tool calls). Claude Science tracing is an
 explicit non-goal for its initial harness; **agy** still has no confirmed log
 location.
 
+See [trace accounting and its limits](docs/observability.md) for Claude's
+response counts, token counters, cache lifetimes, and overlapping session views.
+
 ### Claude account harnesses
 
 For Claude Code, use `provider: anthropic`, omit `model` to use the plan
