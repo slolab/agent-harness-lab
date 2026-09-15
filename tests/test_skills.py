@@ -111,6 +111,31 @@ def test_claude_science_rejects_remote_npx_skill(tmp_path: Path):
         wire_delegated_skills("claude-science", skills)
 
 
+def test_remote_plugin_expands_into_per_skill_npx_commands(tmp_path: Path):
+    skills = parse_capabilities(
+        [
+            {
+                "kind": "plugin",
+                "name": "biotope",
+                "install": "npx",
+                "source": "https://github.com/biocypher/biotope",
+                "skills": ["biotope-croissant", "biocypher"],
+            }
+        ],
+        tmp_path,
+    )
+
+    volumes, commands = wire_delegated_skills("claude", skills)
+
+    assert volumes == []
+    assert commands == [
+        "npx --yes skills add https://github.com/biocypher/biotope "
+        "--skill biotope-croissant --agent claude-code --global --yes",
+        "npx --yes skills add https://github.com/biocypher/biotope "
+        "--skill biocypher --agent claude-code --global --yes",
+    ]
+
+
 def test_unknown_harness_rejects_delegated_skill(tmp_path: Path):
     skills = parse_capabilities(
         [

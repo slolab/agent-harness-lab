@@ -47,6 +47,12 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 # `install: copy` — pass a local `path` to `npx skills`; the installed copy
 # is writable and does not reflect later host edits.
 # `install: npx` — resolve `source` remotely and install the named skill.
+#
+# A `kind: plugin` (a `.claude-plugin/` bundle shipping several skills) can be
+# referenced once instead of listing each skill. Local (`mount`/`copy`) plugins
+# are enumerated from `path`; an optional `skills:` list narrows the set. Remote
+# (`npx`) plugins can't be enumerated on disk, so they require a `skills:` list
+# naming which skills to install from `source`.
 
 # capabilities:
 #   # Local hot reload:
@@ -64,6 +70,12 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #     name: web-design-guidelines
 #     install: npx
 #     source: vercel-labs/agent-skills
+#   # Remote plugin — install a chosen subset of its skills:
+#   - kind: plugin
+#     name: biotope
+#     install: npx
+#     source: https://github.com/biocypher/biotope
+#     skills: [biotope-croissant, biocypher]
 
 # --- Packages: local (not-yet-published) Python checkouts to preinstall --
 # For a CLI or library a skill depends on that's still being developed

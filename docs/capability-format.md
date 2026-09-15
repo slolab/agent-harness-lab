@@ -10,6 +10,10 @@ Use the standard Agent Skill format: a directory with a `SKILL.md` (YAML frontma
 
 **AHL's only added expectation:** a local skill directory is self-contained and addressable by a host path. Remote skills are named within a source format accepted by `vercel-labs/skills`; AHL delegates remote discovery and installation instead of defining a repository format.
 
+### Plugins (skill bundles)
+
+A Claude Code plugin — a `.claude-plugin/plugin.json` alongside `skills/<name>/SKILL.md` directories — is the standard "several skills shipped together" format. Reference it once as `kind: plugin` and AHL expands it into one skill capability per bundled skill at parse time, so every harness's skill wiring handles the result unchanged. Local plugins (`install: mount`/`copy`) are enumerated from their `path`; an optional `skills:` list narrows the set. Remote plugins (`install: npx`) can't be enumerated on disk, so they **require** a `skills:` list naming which skills to install from `source` (AHL runs one `npx skills add <source> --skill <name>` per named skill).
+
 ## MCP servers
 
 Build a standard MCP server per the Model Context Protocol spec. The protocol spec and SDKs are the authoritative reference — don't restate protocol details here:

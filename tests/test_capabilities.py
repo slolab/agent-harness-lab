@@ -182,3 +182,74 @@ def test_parse_capabilities_plugin_with_no_skills_rejected(tmp_path: Path):
             [{"kind": "plugin", "name": "my-plugin", "install": "mount", "path": str(plugin)}],
             tmp_path,
         )
+
+
+def test_parse_capabilities_local_plugin_skills_subset(tmp_path: Path):
+    plugin = _make_plugin(tmp_path, ["alpha", "beta", "gamma"])
+    caps = parse_capabilities(
+        [{
+            "kind": "plugin", "name": "my-plugin", "install": "mount",
+            "path": str(plugin), "skills": ["gamma", "alpha"],
+        }],
+        tmp_path,
+    )
+    # Order follows the requested `skills:` list, not directory order.
+    assert [c.name for c in caps] == ["gamma", "alpha"]
+    assert caps[0].path == plugin / "skills" / "gamma"
+
+
+def test_parse_capabilities_local_plugin_unknown_skill_rejected(tmp_path: Path):
+    plugin = _make_plugin(tmp_path, ["alpha", "beta"])
+    with pytest.raises(ConfigError, match="skills not found"):
+        parse_capabilities(
+            [{
+                "kind": "plugin", "name": "my-plugin", "install": "mount",
+                "path": str(plugin), "skills": ["alpha", "missing"],
+            }],
+            tmp_path,
+        )
+
+
+def test_parse_capabilities_remote_plugin_expands_named_skills(tmp_path: Path):
+    caps = parse_capabilities(
+        [{
+            "kind": "plugin", "name": "biotope", "install": "npx",
+            "source": "https://github.com/biocypher/biotope",
+            "skills": ["biotope-croissant", "biocypher"],
+        }],
+        tmp_path,
+    )
+    assert [c.name for c in caps] == ["biotope-croissant", "biocypher"]
+    assert all(c.kind == "skill" and c.install == "npx" for c in caps)
+    assert all(c.source == "https://github.com/biocypher/biotope" for c in caps)
+    assert all(c.path is None for c in caps)
+
+
+def test_parse_capabilities_remote_plugin_without_source_rejected(tmp_path: Path):
+    with pytest.raises(ConfigError, match="requires 'source'"):
+        parse_capabilities(
+            [{"kind": "plugin", "name": "biotope", "install": "npx", "skills": ["a"]}],
+            tmp_path,
+        )
+
+
+def test_parse_capabilities_remote_plugin_without_skills_rejected(tmp_path: Path):
+    with pytest.raises(ConfigError, match="requires a 'skills' list"):
+        parse_capabilities(
+            [{
+                "kind": "plugin", "name": "biotope", "install": "npx",
+                "source": "https://github.com/biocypher/biotope",
+            }],
+            tmp_path,
+        )
+
+
+def test_parse_capabilities_remote_plugin_empty_skills_rejected(tmp_path: Path):
+    with pytest.raises(ConfigError, match="non-empty list"):
+        parse_capabilities(
+            [{
+                "kind": "plugin", "name": "biotope", "install": "npx",
+                "source": "https://github.com/biocypher/biotope", "skills": [],
+            }],
+            tmp_path,
+        )
