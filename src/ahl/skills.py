@@ -16,6 +16,7 @@ INSTALLER_AGENTS = {
     "gemini": "gemini-cli",
     "opencode": "opencode",
     "agy": "antigravity-cli",
+    "deepseek": "universal",
 }
 
 

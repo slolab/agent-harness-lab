@@ -11,7 +11,9 @@ from ahl.config import RunConfig, load_config
 
 @pytest.fixture
 def make_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Write a config.yaml + .env under tmp_path and load it as a RunConfig."""
+    """Load a temporary config with synthetic credentials, isolated from the host."""
+    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
 
     def _make(
         *,
@@ -27,6 +29,7 @@ def make_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         env_var = {
             "anthropic": "ANTHROPIC_API_KEY",
             "openai": "OPENAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
             "gemini": "GEMINI_API_KEY",
             "vertex": "GOOGLE_API_KEY",
         }.get(provider)

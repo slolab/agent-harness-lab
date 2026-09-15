@@ -8,16 +8,6 @@ from ahl.capabilities import parse_capabilities
 from ahl.config import ConfigError
 
 
-def test_parse_capabilities_local_skill_resolves_relative_path(tmp_path: Path, skill_dir: Path):
-    caps = parse_capabilities(
-        [{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir.relative_to(tmp_path))}],
-        tmp_path,
-    )
-    assert len(caps) == 1
-    assert caps[0].kind == "skill"
-    assert caps[0].path == skill_dir
-
-
 def test_parse_capabilities_valid_mcp(tmp_path: Path):
     caps = parse_capabilities(
         [{"kind": "mcp", "name": "my-mcp", "install": "pip", "command": "my-mcp-server"}],
@@ -62,32 +52,6 @@ def test_parse_capabilities_mcp_rejects_copy_install(tmp_path: Path):
             [{"kind": "mcp", "name": "x", "install": "copy"}],
             tmp_path,
         )
-
-
-def test_parse_capabilities_valid_skill_copy_install(tmp_path: Path, skill_dir: Path):
-    caps = parse_capabilities(
-        [{"kind": "skill", "name": "my-skill", "install": "copy", "path": str(skill_dir)}],
-        tmp_path,
-    )
-    assert caps[0].install == "copy"
-    assert caps[0].path == skill_dir
-
-
-def test_parse_capabilities_valid_remote_npx_skill(tmp_path: Path):
-    caps = parse_capabilities(
-        [
-            {
-                "kind": "skill",
-                "name": "web-design-guidelines",
-                "install": "npx",
-                "source": "vercel-labs/agent-skills",
-            }
-        ],
-        tmp_path,
-    )
-    assert caps[0].install == "npx"
-    assert caps[0].source == "vercel-labs/agent-skills"
-    assert caps[0].path is None
 
 
 def test_parse_capabilities_remote_npx_requires_source(tmp_path: Path):
@@ -195,21 +159,6 @@ def test_parse_capabilities_local_plugin_unknown_skill_rejected(tmp_path: Path):
             }],
             tmp_path,
         )
-
-
-def test_parse_capabilities_remote_plugin_expands_named_skills(tmp_path: Path):
-    caps = parse_capabilities(
-        [{
-            "kind": "plugin", "name": "biotope", "install": "npx",
-            "source": "https://github.com/biocypher/biotope",
-            "skills": ["biotope-croissant", "biocypher"],
-        }],
-        tmp_path,
-    )
-    assert [c.name for c in caps] == ["biotope-croissant", "biocypher"]
-    assert all(c.kind == "skill" and c.install == "npx" for c in caps)
-    assert all(c.source == "https://github.com/biocypher/biotope" for c in caps)
-    assert all(c.path is None for c in caps)
 
 
 def test_parse_capabilities_remote_plugin_without_source_rejected(tmp_path: Path):

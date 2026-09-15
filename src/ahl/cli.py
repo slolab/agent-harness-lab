@@ -275,11 +275,19 @@ def _fail_docker_command(exc: subprocess.CalledProcessError) -> NoReturn:
     if _docker_daemon_unreachable(combined):
         typer.secho(_DOCKER_UNREACHABLE, fg=typer.colors.RED, err=True)
     else:
-        cmd = (
-            " ".join(str(a) for a in exc.cmd)
-            if isinstance(exc.cmd, (list, tuple))
-            else str(exc.cmd)
-        )
+        # Docker run argv contains provider credentials. Keep diagnostics useful
+        # without copying environment values into terminal output.
+        if isinstance(exc.cmd, (list, tuple)):
+            safe_args = []
+            environment_value = False
+            for arg in map(str, exc.cmd):
+                if environment_value:
+                    arg = arg.split("=", 1)[0] + "=<redacted>"
+                safe_args.append(arg)
+                environment_value = arg in {"-e", "--env"}
+            cmd = " ".join(safe_args)
+        else:
+            cmd = str(exc.cmd)
         typer.secho(
             f"Docker command failed (exit {exc.returncode}): {cmd}",
             fg=typer.colors.RED,

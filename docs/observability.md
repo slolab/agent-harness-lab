@@ -67,3 +67,15 @@ for both appear in [the Claude accounting tests](../tests/test_claude_accounting
 | Gemini | Retains native session records without aggregating token usage. | No equivalent aggregation to correct. |
 | Antigravity (`agy`) | Trace parsing is unsupported. | No token parser to correct. |
 | Claude Science | Trace parsing is unsupported. | No token parser to correct. |
+
+## DeepSeek
+
+DeepSeek summaries follow the [v3 native event rules](deepseek.md#native-trace-summary).
+Each session exposes lineage/preset metadata, models, human and assistant
+`messages`, separate `context_messages`, correlated `tool_calls`, `children`,
+`timing`, `usage`, and response counts. Run totals sum each session's own events
+once. Unknown usage fields propagate `null`; unlike Claude's known-value sums,
+DeepSeek partial logs do not produce a complete-looking component total.
+Native `totalTokens` is reported separately as `usage.total_tokens` and is never
+added to the components. Inspect top-level `warnings` for unreadable, malformed,
+unsupported, or ambiguous native logs.

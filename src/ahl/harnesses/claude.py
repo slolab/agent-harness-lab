@@ -1,8 +1,9 @@
-"""Claude Code adapter — account login, isolated home, skills, and traces."""
+"""Claude Code adapter — account/OpenRouter auth, isolated home, skills, and traces."""
 
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from ahl.config import RunConfig
 from ahl.harnesses.base import (
     Volumes,
     native_skill_mount,
+    provider_key,
     warn_unsupported_mcp,
 )
 
@@ -49,6 +51,14 @@ _ResponseLedger = dict[_ResponseId, _ResponseUsage]
 
 class ClaudeAdapter:
     def build_env(self, config: RunConfig) -> dict[str, str]:
+        if config.provider.name == "openrouter":
+            return {
+                "DISABLE_AUTOUPDATER": "1",
+                "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+                "ANTHROPIC_AUTH_TOKEN": provider_key(config),
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_MODEL": config.model.name,
+            }
         # Deliberately do not inject ANTHROPIC_API_KEY. With no provider
         # credential in the environment Claude Code offers its Claude-account
         # OAuth flow (Pro/Max and eligible Team/Enterprise plans).
@@ -85,9 +95,15 @@ class ClaudeAdapter:
         return _parse_trace(self._home(run_dir))
 
     def start_command(self, config: RunConfig) -> str:
-        return f"claude --model {config.model.name}" if config.model.name else "claude"
+        return shlex.join(["claude", "--model", config.model.name]) if config.model.name else "claude"
 
     def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]:
+        if config.provider.name == "openrouter":
+            return [
+                "OpenRouter credential and model configured through environment variables",
+                "If resuming an account-login run, use /logout and restart Claude to select OpenRouter",
+                "OpenRouter guarantees Claude compatibility only with Anthropic models through Anthropic's first-party provider",
+            ]
         return [
             "No ANTHROPIC_API_KEY is injected; choose Claude App account login when prompted",
             "OAuth credentials and session history are isolated to this run",

@@ -16,6 +16,7 @@ from ahl.skills import wire_delegated_skills
         ("gemini", "gemini-cli"),
         ("opencode", "opencode"),
         ("agy", "antigravity-cli"),
+        ("deepseek", "universal"),
     ],
 )
 def test_remote_skill_targets_active_harness(harness: str, agent: str, tmp_path: Path):
@@ -43,6 +44,7 @@ def test_remote_skill_targets_active_harness(harness: str, agent: str, tmp_path:
 def test_local_copy_mounts_source_for_npx_install(tmp_path: Path, skill_dir: Path):
     skills = parse_capabilities(
         [
+            {"kind": "skill", "name": "live", "install": "mount", "path": str(skill_dir)},
             {
                 "kind": "skill",
                 "name": "my-skill",
@@ -60,21 +62,6 @@ def test_local_copy_mounts_source_for_npx_install(tmp_path: Path, skill_dir: Pat
         "npx --yes skills add /opt/ahl-skill-sources/0 "
         "--skill my-skill --agent claude-code --global --yes"
     ]
-
-
-def test_local_mount_is_not_delegated(tmp_path: Path, skill_dir: Path):
-    skills = parse_capabilities(
-        [
-            {
-                "kind": "skill",
-                "name": "my-skill",
-                "install": "mount",
-                "path": str(skill_dir),
-            }
-        ],
-        tmp_path,
-    )
-    assert wire_delegated_skills("claude", skills) == ([], [])
 
 
 def test_claude_science_keeps_local_copy_out_of_delegated_flow(
@@ -125,6 +112,8 @@ def test_remote_plugin_expands_into_per_skill_npx_commands(tmp_path: Path):
         tmp_path,
     )
 
+    assert [cap.name for cap in skills] == ["biotope-croissant", "biocypher"]
+    assert all(cap.kind == "skill" and cap.install == "npx" and cap.path is None for cap in skills)
     volumes, commands = wire_delegated_skills("claude", skills)
 
     assert volumes == []

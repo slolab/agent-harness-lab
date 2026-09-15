@@ -5,8 +5,8 @@
 # name or a {name, parameters} mapping — see "Other harness/provider
 # combinations" at the bottom for worked examples.
 
-harness: gemini       # gemini | opencode | agy | claude | claude-science
-provider: gemini      # anthropic | openai | gemini | vertex
+harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek
+provider: gemini      # anthropic | openai | gemini | vertex | openrouter
 model: gemini-3.5-flash
 
 # --- Workspace ---------------------------------------------------------
@@ -35,7 +35,7 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 # --- Capabilities: skills/MCP servers preinstalled into the harness ----
 # See docs/capability-format.md for what a bundle looks like.
 #
-# Skill discovery is native for claude, gemini, opencode, and agy. AHL maps
+# Skill discovery is native for claude, gemini, opencode, agy, and deepseek. AHL maps
 # local mount-mode skills directly into each harness's native skill directory.
 # All other skill installs are delegated to `npx skills`, globally and
 # non-interactively, with the installer agent inferred from `harness`.
@@ -112,7 +112,7 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #   harness: gemini
 #   provider: {name: vertex, parameters: {project: ..., location: global}}
 #
-# Antigravity CLI (agy) — Vertex express only (no key/ADC fallback otherwise):
+# Antigravity CLI (agy) — Gemini or Vertex express:
 #   harness: agy
 #   provider: {name: vertex, parameters: {project: ..., location: global}}
 #
@@ -135,3 +135,21 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #   provider: anthropic
 #   model: claude-sonnet-4-6
 #   # or provider: vertex + model: gemini-3.5-flash -> google-vertex/gemini-3.5-flash
+
+# OpenRouter (Claude Code, OpenCode, or DeepSeek; requires OPENROUTER_API_KEY):
+#   harness: claude
+#   provider: openrouter
+#   model: qwen/qwen3.7-flash   # exact provider-native ID; explicit model required
+#   # OpenCode adds its own prefix: openrouter/qwen/qwen3.7-flash
+#   # model: openrouter/auto becomes openrouter/openrouter/auto in OpenCode.
+#
+# DeepSeek official browser UI (OpenRouter only):
+#   harness:
+#     name: deepseek
+#     parameters:
+#       port: 3080             # integer 1..65535; host-loopback publication
+#   provider: openrouter
+#   model: qwen/qwen3.7-flash
+#   # Start ahl-deepseek --port 3080, then open its printed authenticated URL.
+#   # Native search needs DEEPSEEK_API_KEY, which AHL does not supply.
+#   # Resume keeps sessions and skills; AHL refreshes its provider/model settings.

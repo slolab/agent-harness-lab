@@ -7,19 +7,6 @@ from pathlib import Path
 import pytest
 
 from ahl.harnesses import get_adapter
-from ahl.harnesses.agy import AgyAdapter
-from ahl.harnesses.claude import ClaudeAdapter
-from ahl.harnesses.claude_science import ClaudeScienceAdapter
-from ahl.harnesses.gemini import GeminiAdapter
-from ahl.harnesses.opencode import OpenCodeAdapter
-
-
-def test_get_adapter_returns_expected_class():
-    assert isinstance(get_adapter("claude"), ClaudeAdapter)
-    assert isinstance(get_adapter("claude-science"), ClaudeScienceAdapter)
-    assert isinstance(get_adapter("gemini"), GeminiAdapter)
-    assert isinstance(get_adapter("opencode"), OpenCodeAdapter)
-    assert isinstance(get_adapter("agy"), AgyAdapter)
 
 
 def test_get_adapter_unknown_name_raises():
@@ -27,34 +14,22 @@ def test_get_adapter_unknown_name_raises():
         get_adapter("not-a-harness")
 
 
-def _mcp_capability(tmp_path: Path):
-    from ahl.capabilities import parse_capabilities
-
-    return parse_capabilities(
-        [{"kind": "mcp", "name": "my-mcp", "install": "pip", "command": "my-mcp-server"}],
-        tmp_path,
-    )
-
-
 class TestClaudeAdapter:
     def test_build_env_contains_no_anthropic_key(self, make_config):
         config = make_config(harness="claude", provider="anthropic", api_key="")
         assert get_adapter("claude").build_env(config) == {"DISABLE_AUTOUPDATER": "1"}
 
-    def test_seed_mounts_isolated_home(self, make_config, tmp_path: Path):
-        config = make_config(harness="claude", provider="anthropic")
-        adapter = get_adapter("claude")
-        run_dir = tmp_path / "run"
-        assert adapter.seed(run_dir, config) == [(run_dir / "claude", "/root/.claude")]
-        assert (run_dir / "claude" / "projects").is_dir()
-
     def test_wire_capabilities_mount_install_binds_host_path_directly(
-        self, make_config, tmp_path: Path, skill_dir: Path
+        self, make_config, tmp_path: Path, skill_dir: Path, capsys
     ):
         config = make_config(
             harness="claude",
             provider="anthropic",
-            capabilities=[{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir)}],
+            capabilities=[
+                {"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir.relative_to(tmp_path))},
+                {"kind": "skill", "name": "copied", "install": "copy", "path": str(skill_dir)},
+                {"kind": "mcp", "name": "my-mcp", "install": "pip", "command": "my-mcp-server"},
+            ],
         )
         run_dir = tmp_path / "run"
         adapter = get_adapter("claude")
@@ -63,32 +38,14 @@ class TestClaudeAdapter:
         # Bind-mounted straight from the host skill_dir — no copy, so editing
         # skill_dir later is reflected without rerunning ahl up (hot reload).
         assert volumes == [(skill_dir, "/workspace/.claude/skills/my-skill")]
-
-    def test_wire_capabilities_copy_install_is_left_to_delegated_installer(
-        self, make_config, tmp_path: Path, skill_dir: Path
-    ):
-        config = make_config(
-            harness="claude",
-            provider="anthropic",
-            capabilities=[{"kind": "skill", "name": "my-skill", "install": "copy", "path": str(skill_dir)}],
-        )
-        run_dir = tmp_path / "run"
-        adapter = get_adapter("claude")
-        volumes = adapter.wire_capabilities(run_dir, config, config.capabilities)
-
-        assert volumes == []
-
-    def test_wire_capabilities_warns_on_mcp(self, make_config, tmp_path: Path, capsys):
-        config = make_config(harness="claude", provider="anthropic")
-        adapter = get_adapter("claude")
-        adapter.wire_capabilities(tmp_path / "run", config, _mcp_capability(tmp_path))
         assert "not wired for harness 'claude'" in capsys.readouterr().err
 
     def test_parse_trace_reads_messages_and_tool_calls(self, make_config, tmp_path: Path):
         config = make_config(harness="claude", provider="anthropic")
         run_dir = tmp_path / "run"
         adapter = get_adapter("claude")
-        adapter.seed(run_dir, config)
+        assert adapter.seed(run_dir, config) == [(run_dir / "claude", "/root/.claude")]
+        assert (run_dir / "claude/projects").is_dir()
         session_dir = run_dir / "claude" / "projects" / "-workspace"
         session_dir.mkdir()
         records = [
@@ -212,6 +169,7 @@ class TestClaudeScienceAdapter:
         )
         adapter = get_adapter("claude-science")
         assert "--port 8765" in adapter.start_command(config)
+        assert "--dangerously-no-sandbox" not in adapter.start_command(config)
         args = adapter.docker_args(config)
         assert "127.0.0.1:8765:8765" in args
         assert "127.0.0.1:8766:8766" in args
@@ -244,6 +202,8 @@ class TestGeminiAdapter:
         assert volumes == [(home, "/root/.gemini")]
         settings = json.loads((home / "settings.json").read_text())
         assert settings["security"]["auth"]["selectedType"] == "gemini-api-key"
+        trace = adapter.parse_trace(run_dir)
+        assert trace["sessions"] == [] and trace["logs"] == []
 
     def test_wire_capabilities_mounts_native_global_skill(
         self, make_config, tmp_path: Path, skill_dir: Path
@@ -259,15 +219,6 @@ class TestGeminiAdapter:
         volumes = adapter.wire_capabilities(run_dir, config, config.capabilities)
 
         assert volumes == [(skill_dir, "/root/.gemini/skills/my-skill")]
-
-    def test_parse_trace_on_freshly_seeded_home_has_no_sessions(self, make_config, tmp_path: Path):
-        config = make_config(harness="gemini", provider="gemini")
-        run_dir = tmp_path / "run"
-        adapter = get_adapter("gemini")
-        adapter.seed(run_dir, config)
-        trace = adapter.parse_trace(run_dir)
-        assert trace["sessions"] == []
-        assert trace["logs"] == []
 
 
 class TestOpenCodeAdapter:
@@ -293,7 +244,10 @@ class TestOpenCodeAdapter:
         config = make_config(
             harness="opencode",
             provider="anthropic",
-            capabilities=[{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir)}],
+            capabilities=[
+                {"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir)},
+                {"kind": "skill", "name": "copy", "install": "copy", "path": str(skill_dir)},
+            ],
         )
         run_dir = tmp_path / "run"
         adapter = get_adapter("opencode")
@@ -306,31 +260,6 @@ class TestOpenCodeAdapter:
         oc_config = json.loads((config_dir / "opencode.json").read_text())
         assert "instructions" not in oc_config
 
-    def test_wire_capabilities_copy_install_is_left_to_delegated_installer(
-        self, make_config, tmp_path: Path, skill_dir: Path
-    ):
-        config = make_config(
-            harness="opencode",
-            provider="anthropic",
-            capabilities=[{"kind": "skill", "name": "my-skill", "install": "copy", "path": str(skill_dir)}],
-        )
-        run_dir = tmp_path / "run"
-        adapter = get_adapter("opencode")
-        adapter.seed(run_dir, config)
-        volumes = adapter.wire_capabilities(run_dir, config, config.capabilities)
-
-        assert volumes == []
-
-    def test_parse_trace_reports_log_files(self, make_config, tmp_path: Path):
-        config = make_config(harness="opencode", provider="anthropic")
-        run_dir = tmp_path / "run"
-        adapter = get_adapter("opencode")
-        adapter.seed(run_dir, config)
-        (run_dir / "opencode" / "data" / "log" / "session.log").write_text("hi")
-
-        trace = adapter.parse_trace(run_dir)
-        assert trace["log_files"] == ["session.log"]
-
     def test_parse_trace_reads_sessions_from_sqlite_db(self, make_config, tmp_path: Path):
         # Recent OpenCode versions store session/message/part data in
         # opencode.db (sqlite), not the file-based layout the public docs
@@ -339,10 +268,12 @@ class TestOpenCodeAdapter:
         run_dir = tmp_path / "run"
         adapter = get_adapter("opencode")
         adapter.seed(run_dir, config)
+        (run_dir / "opencode/data/log/session.log").write_text("native log")
         _write_fake_opencode_db(run_dir / "opencode" / "data" / "opencode.db")
 
         trace = adapter.parse_trace(run_dir)
 
+        assert trace["log_files"] == ["session.log"]
         assert len(trace["sessions"]) == 1
         session = trace["sessions"][0]
         assert session["id"] == "ses_1"

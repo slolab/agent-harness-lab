@@ -1,10 +1,10 @@
 # Agent Harness Lab
 
 A sandbox for testing skills and MCP servers against real agent harnesses
-(Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`) in
+(Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`, DeepSeek Harness) in
 Docker — isolated and repeatable, not for driving a persistent project.
-Key-based harnesses receive only their selected provider key; Claude Code and
-Claude Science instead use a manual Claude-account login. Observability comes
+Key-based harnesses receive only their selected provider key. Claude Code with
+`provider: anthropic` and Claude Science use a manual Claude-account login. Observability comes
 from reading each harness's own logs, not from a wire proxy.
 
 ## Quickstart
@@ -24,8 +24,8 @@ in `config.yaml`):
 GEMINI_API_KEY=...
 ```
 
-For `harness: claude` or `harness: claude-science`, no `.env` file or
-Anthropic API key is required.
+For `harness: claude` or `harness: claude-science` with `provider: anthropic`,
+no `.env` file or Anthropic API key is required.
 
 Then launch the sandbox:
 
@@ -45,8 +45,8 @@ Two files, clean split:
 - `config.yaml` — **non-secret selection**.
 
 ```yaml
-harness: gemini       # gemini | opencode | agy | claude | claude-science
-provider: gemini      # anthropic | openai | gemini | vertex
+harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek
+provider: gemini      # anthropic | openai | gemini | vertex | openrouter
 model: gemini-3.5-flash
 workspace: ./projects/demo
 ```
@@ -54,6 +54,7 @@ workspace: ./projects/demo
 | provider  | key env             |
 |-----------|---------------------|
 | anthropic | `ANTHROPIC_API_KEY` (OpenCode only; not Claude login harnesses) |
+| openrouter | `OPENROUTER_API_KEY` (Claude Code, OpenCode, DeepSeek) |
 | openai    | `OPENAI_API_KEY`    |
 | gemini    | `GEMINI_API_KEY`    |
 | vertex    | `GOOGLE_API_KEY`    |
@@ -87,10 +88,11 @@ chat history, etc.) — instead of starting a fresh `runs/<id>/`.
 | harness        | auth/providers                      | launch (inside the shell) |
 |----------------|-------------------------------------|---------------------------|
 | gemini         | gemini, vertex API key              | `gemini --skip-trust -m <model>` |
-| opencode       | anthropic, openai, gemini, vertex API key | `opencode -m <provider/model>` |
-| claude         | Claude account login                | `claude` (or `--model <model>`) |
+| opencode       | anthropic, openai, gemini, vertex, openrouter API key | `opencode -m <provider/model>` |
+| claude         | Claude account login or OpenRouter key                | `claude` (or `--model <model>`) |
 | claude-science | Claude account login; x64 Linux     | `claude-science serve --no-browser --host 0.0.0.0 --port 8000` |
-| agy            | vertex API key only                 | `agy` |
+| deepseek       | OpenRouter API key | `ahl-deepseek --port 3080` |
+| agy            | gemini or vertex API key                 | `agy` |
 
 Auth is either pre-seeded or completed interactively per harness; `ahl up`
 prints the exact launch command and harness-specific hints. Add a harness by
@@ -100,7 +102,7 @@ adapter — see `CLAUDE.md`.
 ## Observability
 
 Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
-workspace mode, timestamp). **gemini**, **opencode**, and **claude** persist
+workspace mode, timestamp). **gemini**, **opencode**, **claude**, and **deepseek** persist
 their own session state under `runs/<id>/` and get a normalized `trace.json`
 on exit (sessions, messages, tool calls). Claude Science tracing is an
 explicit non-goal for its initial harness; **agy** still has no confirmed log
@@ -123,6 +125,40 @@ loopback; and mounts a fresh `~/.claude-science` plus the run workspace. See
 [the Claude Science runbook](docs/claude-science.md) for configuration,
 sign-in, skill upload, sandbox fallback, and the Linux acceptance checks.
 
+### OpenRouter
+
+Set `provider: openrouter`, `OPENROUTER_API_KEY` in `.env`, and an explicit
+provider-native `model` such as `qwen/qwen3.7-flash`. Supported harnesses are
+Claude Code, OpenCode, and DeepSeek; other combinations fail during config loading.
+Model IDs are preserved exactly. OpenCode adds its outer routing prefix:
+`openrouter/auto` becomes `openrouter/openrouter/auto` inside OpenCode.
+
+Claude receives the gateway URL, bearer credential, and primary model through
+its environment; plain `claude` uses that model too. When switching an existing
+account-login run to OpenRouter, run `/logout` inside Claude and restart it.
+AHL preserves saved credentials. OpenRouter [guarantees Claude compatibility
+with Anthropic's first-party provider](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration);
+AHL does not restrict model choices.
+
+### DeepSeek browser
+
+```yaml
+harness: deepseek
+provider: openrouter
+model: qwen/qwen3.7-flash
+```
+
+Run `uv run ahl up`, then the printed `ahl-deepseek --port 3080` command.
+Open DSH's authenticated URL in your browser. The official Web UI retains
+Standard mode and the native preset roster. Only host loopback is published.
+Use `harness: {name: deepseek, parameters: {port: 4321}}` to change the port;
+an occupied port is an error.
+
+Native search requires a separate `DEEPSEEK_API_KEY`, which this integration
+does not supply. Search stays configured and fails without that credential.
+See the [DeepSeek runbook](docs/deepseek.md) for state, resume, skills, version
+pinning, browser acceptance, and trace limitations.
+
 ## Isolation
 
 For key-based harnesses, the selected provider key is injected as an env var;
@@ -132,7 +168,7 @@ Claude login harnesses receive no provider key. Egress is currently
 for re-enabling default-deny egress later. Local mount-mode capability and
 package sources are read-only, so an agent cannot write back into your
 checkout. Skills installed through `npx skills` are writable but remain
-inside the ephemeral container.
+in run-owned state when the adapter persists their native directory.
 
 ## What is tracked
 

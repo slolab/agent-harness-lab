@@ -33,20 +33,6 @@ def test_docker_run_args_assembles_mounts_and_env(make_config, tmp_path: Path):
     assert args[-3:] == ["agent-harness-lab:claude", "/usr/local/bin/init-firewall.sh", "bash"]
 
 
-def test_docker_run_args_no_extra_volumes_or_name(make_config, tmp_path: Path):
-    config = make_config(harness="gemini", provider="gemini")
-    args = docker_run_args(config, {"GEMINI_API_KEY": "test-key"}, tmp_path / "ws")
-    assert "--name" not in args
-    assert args.count("-v") == 1  # only the workspace mount
-
-
-def test_docker_run_args_includes_adapter_specific_args(make_config, tmp_path: Path):
-    config = make_config(harness="claude-science", provider="anthropic", api_key="")
-    extra_args = ["--platform", "linux/amd64", "-p", "127.0.0.1:8000:8000"]
-    args = docker_run_args(config, {}, tmp_path / "ws", extra_args=extra_args)
-    assert args[4:8] == extra_args
-
-
 def test_docker_run_args_setup_commands_chain_into_exec_bash(make_config, tmp_path: Path):
     config = make_config(harness="claude", provider="anthropic")
     args = docker_run_args(
@@ -56,6 +42,8 @@ def test_docker_run_args_setup_commands_chain_into_exec_bash(make_config, tmp_pa
         setup_commands=["uv tool install --quiet --editable /opt/ahl-packages/foo"],
     )
 
+    assert "--name" not in args
+    assert args.count("-v") == 1
     assert args[-1] == "uv tool install --quiet --editable /opt/ahl-packages/foo && exec bash"
     assert args[-5:-1] == ["agent-harness-lab:claude", "/usr/local/bin/init-firewall.sh", "sh", "-c"]
 

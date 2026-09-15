@@ -15,16 +15,19 @@ if TYPE_CHECKING:
     from ahl.workspace import Workspace
 
 
-SUPPORTED_HARNESSES = {"claude", "claude-science", "opencode", "agy", "gemini"}
+SUPPORTED_HARNESSES = {"claude", "claude-science", "opencode", "agy", "gemini", "deepseek"}
 
-# These harnesses authenticate interactively with a Claude account. They must
-# neither require nor receive an Anthropic API key.
-ACCOUNT_LOGIN_HARNESSES = {"claude", "claude-science"}
+
+def uses_account_login(harness: str, provider: str) -> bool:
+    """Claude's Anthropic route uses account login; gateways use credentials."""
+    return harness in {"claude", "claude-science"} and provider == "anthropic"
+
 
 # Provider name -> host env var holding the real API key (read from .env).
 PROVIDER_KEY_ENV = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "vertex": "GOOGLE_API_KEY",
 }
@@ -93,14 +96,28 @@ def load_config(config_path: Path) -> RunConfig:
     model_raw = raw.get("model")
     model = _parse_named(model_raw, "model") if model_raw is not None else Named("", {})
 
-    if harness.name in ACCOUNT_LOGIN_HARNESSES and provider.name != "anthropic":
+    if harness.name == "claude-science" and provider.name != "anthropic":
         raise ConfigError(
             f"Harness '{harness.name}' authenticates with a Claude account and requires "
             "provider: anthropic"
         )
 
+    if harness.name == "claude" and provider.name not in {"anthropic", "openrouter"}:
+        raise ConfigError("Harness 'claude' requires provider: anthropic or openrouter")
+    if provider.name == "openrouter":
+        if harness.name not in {"claude", "opencode", "deepseek"}:
+            raise ConfigError(f"Harness '{harness.name}' does not support provider: openrouter")
+        if not model.name.strip():
+            raise ConfigError("provider: openrouter requires an explicit model")
+    if harness.name == "deepseek":
+        if provider.name != "openrouter":
+            raise ConfigError("Harness 'deepseek' requires provider: openrouter")
+        port = harness.parameters.get("port", 3080)
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ConfigError("DeepSeek port must be an integer from 1 to 65535")
+
     key_env = PROVIDER_KEY_ENV[provider.name]
-    if harness.name not in ACCOUNT_LOGIN_HARNESSES and not os.getenv(key_env):
+    if not uses_account_login(harness.name, provider.name) and not os.getenv(key_env):
         raise ConfigError(
             f"Missing API key env {key_env}. Add it to {root / '.env'} or your shell."
         )

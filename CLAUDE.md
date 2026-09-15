@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Agent Harness Lab (AHL) is a development/debug environment for testing skills and MCP servers against real agent harnesses (Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`) inside a Docker sandbox, driven by hand through an interactive shell. Key-based harnesses receive the selected provider key; Claude Code and Claude Science authenticate through an interactive Claude-account login and receive no Anthropic API key. **It is not a tool for driving a persistent real project** — the goal is isolated, repeatable, debuggable runs for people building capabilities, so the same starting state can be replayed across harnesses or capability versions (see "Workspace is a template" below). It is the first slice of a larger system described in `docs/specs.md`: an emulator-style lab for developing and evaluating our own MCP servers and skills against real harnesses, with isolation, observability, and (eventually) record/replay and step-debugging. Read `docs/specs.md` before any architectural change. `TODO` tracks the immediate next steps.
+Agent Harness Lab (AHL) is a development/debug environment for testing skills and MCP servers against real agent harnesses (Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`, DeepSeek Harness) inside a Docker sandbox, driven by hand through an interactive shell. Key-based harnesses receive the selected provider key; Claude Code with `provider: anthropic` and Claude Science use account login; Claude Code also supports OpenRouter bearer credentials. **It is not a tool for driving a persistent real project** — the goal is isolated, repeatable, debuggable runs for people building capabilities, so the same starting state can be replayed across harnesses or capability versions (see "Workspace is a template" below). It is the first slice of a larger system described in `docs/specs.md`: an emulator-style lab for developing and evaluating our own MCP servers and skills against real harnesses, with isolation, observability, and (eventually) record/replay and step-debugging. Read `docs/specs.md` before any architectural change. `TODO` tracks the immediate next steps.
 
 **Key architectural decision: no wire-level proxy.** Every harness already writes a full local record of its own LLM turns and tool calls (chat/session JSONL, `logs.json`, etc.) under its own home/config directory. AHL gets observability by mounting that directory and parsing it after (or during) a run — not by intercepting traffic between the harness and its provider or its MCP servers. Don't propose an LLM-plane or MCP-plane proxy/gateway; that approach was deliberately rejected as overkill. The corollary is that deterministic replay and live pause/mutate (described in `docs/specs.md` FR-F/FR-G) no longer have an obvious mechanism now that nothing sits on the wire — that's flagged as an open question in the spec, not solved.
 
@@ -15,7 +15,7 @@ uv sync --extra dev       # install deps incl. ruff/pytest (uv-managed venv)
 uv run ahl up             # build image (if needed) + launch sandbox shell for the configured harness
 uv run ahl up --no-build  # skip the docker build step
 uv run ruff check .       # lint (no [tool.ruff] config block yet)
-uv run pytest             # unit tests — pure functions/classes over paths and dicts, no Docker needed
+uv run pytest             # tests — no Docker needed; relay tests use Node.js and local sockets
 ```
 
 Setup before first run:
@@ -51,3 +51,25 @@ Single Python package, `src/ahl/`, exposed via the `ahl` console script (Typer a
 - **No proxy.** Observability is built by mounting and parsing each harness's own log/session directory, not by intercepting LLM or MCP traffic. See "Key architectural decision" above.
 - **Egress is currently unrestricted** (`docker/init-firewall.sh` is a deliberate passthrough). `TODO` sequences re-enabling default-deny egress (needs `--cap-add=NET_ADMIN`) after log-based observability lands for the remaining harnesses — don't quietly "fix" this without flagging it.
 - **Tracked vs untracked**: `src/`, `docker/`, `docs/`, `pyproject.toml`, `config.example.yaml`, `.env.example` are tracked. `config.yaml`, `.env`, `runs/`, `projects/` are local state and stay untracked (see `.gitignore`).
+
+## OpenRouter and DeepSeek extension points
+
+- Validate new provider/harness combinations in `config.py` before creating a run.
+  Account login is a harness/provider predicate. Preserve provider-native model
+  IDs; OpenCode's OpenRouter routing prefix is separate from the native ID.
+- `DeepSeekAdapter` owns its Web-only startup, loopback Docker publication,
+  `.dsh`/`.agents` mounts, config reconciliation, and v3 trace normalization.
+  `docker/deepseek/ahl-deepseek.cjs` relays raw TCP to DSH's required loopback
+  listener. It carries browser traffic only; provider calls remain direct.
+- The DSH CLI version and transitive dependencies are fixed by
+  `docker/deepseek/package.json` and `package-lock.json`. Use `npm ci`, retain
+  optional platform dependencies, and validate both Linux architectures when
+  changing the lock. Native event schemas must be checked against that build.
+- AHL-owned Cordis patch rows are updated by ID while other rows survive.
+  Add future permission rows here rather than branching in shared Docker code.
+  Native `settings.yaml` overrides composition; reconcile owned settings there
+  on resume. Preserve session-specific native model selection and unrelated state.
+- DeepSeek delegated skills use installer agent `universal`, persisted at
+  `/root/.agents/skills`. Mounted skills live under `/root/.dsh/skills`.
+- Keep tests at behavioral boundaries. The launcher process tests need Node.js
+  and permission to bind local sockets; see `docs/deepseek.md` for live checks.

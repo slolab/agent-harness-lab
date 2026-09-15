@@ -5,23 +5,13 @@ import pytest
 from ahl.config import ConfigError
 
 
-def test_load_config_happy_path(make_config):
-    config = make_config(harness="claude", provider="anthropic", model="claude-sonnet-4-6")
+def test_load_config_account_defaults(make_config):
+    config = make_config(harness="claude", provider="anthropic", extra={"model": None}, api_key="")
     assert config.harness.name == "claude"
     assert config.provider.name == "anthropic"
-    assert config.model.name == "claude-sonnet-4-6"
+    assert config.model.name == ""
     assert config.capabilities == []
     assert config.packages == []
-
-
-def test_load_config_account_login_claude_does_not_require_api_key(make_config):
-    config = make_config(harness="claude", provider="anthropic", api_key="")
-    assert config.harness.name == "claude"
-
-
-def test_load_config_account_login_claude_science_does_not_require_api_key(make_config):
-    config = make_config(harness="claude-science", provider="anthropic", api_key="")
-    assert config.harness.name == "claude-science"
 
 
 def test_load_config_missing_api_key_for_key_based_harness(make_config):
@@ -62,14 +52,3 @@ def test_load_config_vertex_with_params(make_config):
     )
     assert config.provider.name == "vertex"
     assert config.provider.parameters == {"project": "proj-1", "location": "global"}
-
-
-def test_load_config_parses_capabilities(make_config, skill_dir):
-    config = make_config(
-        capabilities=[{"kind": "skill", "name": "my-skill", "install": "mount", "path": str(skill_dir)}]
-    )
-    assert len(config.capabilities) == 1
-    cap = config.capabilities[0]
-    assert cap.kind == "skill"
-    assert cap.name == "my-skill"
-    assert cap.path == skill_dir

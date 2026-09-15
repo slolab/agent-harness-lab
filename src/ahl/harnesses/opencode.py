@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ CONTAINER_DATA_DIR = "/root/.local/share/opencode"
 MODEL_PROVIDER = {
     "anthropic": "anthropic",
     "openai": "openai",
+    "openrouter": "openrouter",
     "gemini": "google",
     "vertex": "google-vertex",
 }
@@ -29,6 +31,8 @@ class OpenCodeAdapter:
         key = provider_key(config)
         if provider == "anthropic":
             return {"ANTHROPIC_API_KEY": key}
+        if provider == "openrouter":
+            return {"OPENROUTER_API_KEY": key}
         if provider == "openai":
             return {"OPENAI_API_KEY": key}
         if provider == "gemini":
@@ -78,7 +82,7 @@ class OpenCodeAdapter:
         return _parse_trace(self._data_dir(run_dir))
 
     def start_command(self, config: RunConfig) -> str:
-        return f"opencode -m {model_id(config)}"
+        return shlex.join(["opencode", "-m", model_id(config)])
 
     def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]:
         if config.provider.name == "vertex":
@@ -97,6 +101,8 @@ def model_id(config: RunConfig) -> str:
     model = config.model.name
     if not model:
         raise ConfigError("OpenCode harness requires model in config.yaml")
+    if config.provider.name == "openrouter":
+        return f"openrouter/{model}"
     if "/" in model:
         return model
     provider_id = MODEL_PROVIDER[config.provider.name]

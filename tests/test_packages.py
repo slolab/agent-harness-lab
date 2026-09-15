@@ -6,7 +6,6 @@ import pytest
 
 from ahl.config import ConfigError
 from ahl.packages import (
-    CONTAINER_PACKAGES_DIR,
     parse_packages,
     wire_packages,
 )
@@ -21,10 +20,10 @@ def test_wire_packages_mount_binds_host_path_directly(tmp_path: Path, package_di
     packages = parse_packages([{"name": "my-package", "path": str(package_dir)}], tmp_path)
     volumes, copies, setup_commands = wire_packages(tmp_path / "run", packages)
 
-    assert volumes == [(package_dir, f"{CONTAINER_PACKAGES_DIR}/my-package")]
+    assert volumes == [(package_dir, "/opt/ahl-packages/my-package")]
     assert copies == []
     assert setup_commands == [
-        f"uv pip install --system --break-system-packages --quiet --editable {CONTAINER_PACKAGES_DIR}/my-package"
+        "uv pip install --system --break-system-packages --quiet --editable /opt/ahl-packages/my-package"
     ]
 
 
@@ -38,7 +37,7 @@ def test_wire_packages_cli_uses_uv_tool_install(tmp_path: Path):
     packages = parse_packages([{"name": "my-cli", "path": str(cli_pkg)}], tmp_path)
     _, _, setup_commands = wire_packages(tmp_path / "run", packages)
 
-    assert setup_commands == [f"uv tool install --quiet --editable {CONTAINER_PACKAGES_DIR}/my-cli"]
+    assert setup_commands == ["uv tool install --quiet --editable /opt/ahl-packages/my-cli"]
 
 
 def test_wire_packages_copy_snapshots_without_mount(tmp_path: Path, package_dir: Path):
@@ -50,5 +49,8 @@ def test_wire_packages_copy_snapshots_without_mount(tmp_path: Path, package_dir:
     assert volumes == []
     assert len(copies) == 1
     assert copies[0].host_path == copied
-    assert copies[0].container_path == f"{CONTAINER_PACKAGES_DIR}/my-package"
-    assert (copied / "pyproject.toml").is_file()
+    assert copies[0].container_path == "/opt/ahl-packages/my-package"
+    original = (package_dir / "pyproject.toml").read_text()
+    assert (copied / "pyproject.toml").read_text() == original
+    (copied / "pyproject.toml").write_text("sandbox changes")
+    assert (package_dir / "pyproject.toml").read_text() == original
