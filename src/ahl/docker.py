@@ -46,27 +46,7 @@ def docker_run_args(
     extra_args: list[str] | None = None,
     image: str | None = None,
 ) -> list[str]:
-    """Assemble the `docker run` invocation.
-
-    `workspace_dir` is the already-resolved host directory to mount at
-    `/workspace` (read-write, unconditionally — the agent has to be able to
-    write into it regardless of whether it's the real template or a per-run
-    copy; see `ahl.workspace.resolve_workspace`).
-
-    `extra_volumes` are read-write — for state a harness writes into at
-    runtime (seeded config/data dirs: logs, sessions, db files). `readonly_volumes`
-    are mounted `:ro` — for host source the container should only ever read
-    from (skill/package capability bundles), so the agent can't mutate a
-    skill or package checkout still under active development on the host.
-
-    `setup_commands` run once, in order, before the interactive shell starts
-    (e.g. `uv tool install --editable <path>` for a preinstalled local
-    package) — implemented as a shell one-liner since the container's command
-    is otherwise just `init-firewall.sh bash`.
-
-    `detached` + `hold` start the container in the background (`sleep
-    infinity`) so `cli.py` can `docker cp` package trees in before setup.
-    """
+    """`readonly_volumes` keep host checkouts under development safe from the agent; the workspace is always writable."""
     args = [
         "docker",
         "run",

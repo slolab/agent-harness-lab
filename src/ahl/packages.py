@@ -118,9 +118,8 @@ def _has_cli_entrypoints(path: Path) -> bool:
 
 def _package_setup_command(pkg: Package, container_path: str) -> str:
     requirement = f"{container_path}[{','.join(pkg.extras)}]" if pkg.extras else container_path
-    if _has_cli_entrypoints(pkg.path):
-        return f"uv tool install --quiet --editable {shlex.quote(requirement)}"
-    return f"uv pip install --system --break-system-packages --quiet --editable {shlex.quote(requirement)}"
+    installer = "uv tool install" if _has_cli_entrypoints(pkg.path) else "uv pip install --system --break-system-packages"
+    return f"{installer} --quiet --editable {shlex.quote(requirement)}"
 
 
 def _copy_package(pkg: Package, dest_dir: Path) -> Path:
