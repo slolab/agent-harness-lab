@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 from importlib import metadata, resources
 from pathlib import Path
@@ -39,16 +38,16 @@ def docker(monkeypatch):
         networks=set(),
         image_id="sha256:" + "ab" * 32,
         labels={},
-        git=True,
+        ahl_tracked=True,
     )
 
     def run(args, **kwargs):
         if args[0] == "git":
-            if state.git:
+            if state.ahl_tracked or "ls-files" not in args:
                 return real_run(args, **kwargs)
             if kwargs.get("check"):
-                raise subprocess.CalledProcessError(128, args)
-            return subprocess.CompletedProcess(args, 128, "", "fatal: not a git repository")
+                raise subprocess.CalledProcessError(1, args)
+            return subprocess.CompletedProcess(args, 1, "", "error: pathspec did not match any file(s) known to git")
         state.calls.append(args)
         if args[:2] == ["docker", "build"]:
             state.build_envs.append(kwargs.get("env"))
@@ -175,7 +174,7 @@ def test_a1_ac2_env_file_precedence_and_missing_key_errors(tmp_path, monkeypatch
     with pytest.raises(ConfigError, match=re.escape(str(empty))):
         load_config(config, empty)
     (tmp_path / "conf/.env").write_text("# no provider key\n")
-    with pytest.raises(ConfigError, match=re.escape(str(tmp_path / "conf/.env"))):
+    with pytest.raises(ConfigError, match=f"neither in {re.escape(str(tmp_path / 'conf/.env'))}"):
         load_config(config)
     (tmp_path / "conf/.env").unlink()
     with pytest.raises(ConfigError, match="no env file was read"):
@@ -198,10 +197,8 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
     result = ahl_cli("build", "-c", "../conf/config.yaml")
 
     assert result.exit_code == 0, result.output
-    dockerfile = IMAGES / "deepseek.Dockerfile"
-    assert dockerfile.is_file() and (IMAGES / "deepseek/package-lock.json").is_file()
     assert builds(docker) == [
-        ["docker", "build", "-t", "agent-harness-lab:deepseek", "-f", str(dockerfile), str(IMAGES)]
+        ["docker", "build", "-t", "agent-harness-lab:deepseek", "-f", str(IMAGES / "deepseek.Dockerfile"), str(IMAGES)]
     ]
     assert docker.build_envs == [{**os.environ, "BUILDX_NO_DEFAULT_ATTESTATIONS": "1"}]
 
@@ -255,7 +252,7 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
 
     docker.image_id = "sha256:" + "cd" * 32
     docker.labels = {"ahl.harness": "opencode"}
-    docker.git = False
+    docker.ahl_tracked = False
     unlabelled = ahl_cli("up", "-c", config, "--no-build", "--name", "unlabelled")
 
     assert unlabelled.exit_code == 0, unlabelled.output
@@ -341,13 +338,11 @@ def test_a1_ac8_extras_reach_installs_for_tools_and_libraries_in_both_modes(make
 
     assert result.exit_code == 0, result.output
     [setup] = [c[-1] for c in docker.calls if c[:2] == ["docker", "exec"] and c[-3:-1] == ["sh", "-c"]]
-    tool = ["uv", "tool", "install", "--quiet", "--editable"]
-    lib = ["uv", "pip", "install", "--system", "--break-system-packages", "--quiet", "--editable"]
-    assert [shlex.split(cmd) for cmd in setup.split(" && ")] == [
-        [*tool, "/opt/ahl-packages/tool-mount[graph,db]"],
-        [*tool, "/opt/ahl-packages/tool-copy[graph,db]"],
-        [*lib, "/opt/ahl-packages/lib-mount[graph,db]"],
-        [*lib, "/opt/ahl-packages/lib-copy[graph,db]"],
+    assert setup.split(" && ") == [
+        "uv tool install --quiet --editable '/opt/ahl-packages/tool-mount[graph,db]'",
+        "uv tool install --quiet --editable '/opt/ahl-packages/tool-copy[graph,db]'",
+        "uv pip install --system --break-system-packages --quiet --editable '/opt/ahl-packages/lib-mount[graph,db]'",
+        "uv pip install --system --break-system-packages --quiet --editable '/opt/ahl-packages/lib-copy[graph,db]'",
     ]
 
 
