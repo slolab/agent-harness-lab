@@ -124,15 +124,16 @@ This is an optional part of `HarnessAdapter`, defined in `src/ahl/harnesses/base
 
 ### OpenCode driver
 
-- **Command:** `opencode run --format json -m openrouter/<model>`, plus `--session <session id>` from turn 2 onwards. The prompt comes from stdin. If the pinned version does not read its message from stdin, the driver passes stdin as one argument inside the container (`sh -c 'exec opencode run … "$(cat)"'`).
+- **Command:** `opencode run --format json -m <model_id(config)>`, plus `--session <session id>` from turn 2 onwards, reusing the adapter's existing provider-aware `model_id(config)` (`src/ahl/harnesses/opencode.py`) rather than hardcoding `openrouter/<model>`. The prompt comes from stdin. If the pinned version does not read its message from stdin, the driver passes stdin as one argument inside the container (`sh -c 'exec opencode run … "$(cat)"'`).
 - **Permissions:** the seeded `opencode.json` sets each permission key of the pinned version explicitly, because behaviour on `ask` varies between versions. The adapter keeps that list of keys.
   - All keys are `allow`, except `question` (the ask-the-user tool), which is `deny` in `ahl run`.
   - A web deny from `permissions.deny` sets `webfetch` and `websearch` to `deny`. `session.json` lists them under `permissions.applied`.
   - This seeding applies to `ahl up` as well. OpenCode web denials become supported there too.
-- **Small model:** `small_model` is set to the run's model, so title and summary calls do not go to a second model.
-- **Provider routing:** `model.parameters.provider` is copied verbatim into `provider.openrouter.models["<model>"].options.provider` in `opencode.json`. Example: `{"order": ["deepinfra"], "allow_fallbacks": false}`.
+- **Small model:** `small_model` is set to `model_id(config)`, the same provider-aware id as `model`, so title and summary calls do not go to a second model or a different provider.
+- **Provider routing:** only when `provider: openrouter`. `model.parameters.provider` is copied verbatim into `provider.openrouter.models["<model>"].options.provider` in `opencode.json`. Example: `{"order": ["deepinfra"], "allow_fallbacks": false}`. With any other provider, no OpenRouter routing options are set.
 - **Status:** a turn is `failed` if the exit code is non-zero (`harness_exit`), an `error` event appears in stdout (`harness_reported_error`), or the turn produced no assistant message (`no_assistant_output`). Any of these becomes `provider_error` when the error shows a provider or API error. Otherwise the turn is `completed`.
 - **Usage source:** `opencode.db`, not stdout. `run --format json` can exit before its final `step_finish` event (opencode#26855). The current parser reads only session-level input and output totals from the `session` table. A2 extends it to read the `message` and `part` tables, with per-message tokens including cache reads and writes.
+- **Reasoning tokens:** the pinned OpenCode version stores billed output tokens excluding reasoning, with reasoning tokens in a separate field. A2's `output_tokens` is billed output *including* reasoning (see Token definitions below), so the parser adds them: `output_tokens = native output tokens + native reasoning tokens`, and `reasoning_tokens = native reasoning tokens`. `docs/trace-schema.md` documents this mapping for the pinned version.
 
 ### Normalized trace (`trace.jsonl`)
 
@@ -286,8 +287,9 @@ Where a harness or provider counts cached tokens inside its input figure, the ad
 - **AC-10** (unit) OpenCode seeding:
   - the seeded config sets every key in the adapter's permission list explicitly. In `ahl run` all are `allow` except `question`, which is `deny`;
   - with `permissions.deny: [websearch, webfetch]` it sets `webfetch` and `websearch` to `deny`, and `session.json` lists both as applied;
-  - `small_model` equals the run's model;
-  - `model.parameters.provider` appears verbatim in the config's OpenRouter model options, and `model_parameters.unsupported` is empty.
+  - `small_model` equals `model_id(config)`;
+  - with `provider: openrouter`, `model.parameters.provider` appears verbatim in the config's OpenRouter model options, and `model_parameters.unsupported` is empty;
+  - with a non-OpenRouter provider, for example `anthropic`, the command and `opencode.json` use that provider's `model_id(config)` for `model` and `small_model`, and no OpenRouter routing options are set.
 - **AC-11** (unit) Driver status rules, on recorded outputs:
   - Claude: exit 0 with `is_error: false` is `completed`; exit 0 with `is_error: true` is `failed` with `harness_reported_error`;
   - OpenCode: a non-zero exit gives `harness_exit`; exit 0 with an `error` event gives `harness_reported_error`; exit 0 with no assistant message in `opencode.db` gives `no_assistant_output`; otherwise `completed`.
@@ -302,12 +304,13 @@ Where a harness or provider counts cached tokens inside its input figure, the ad
   - the same nonce test as AC-12 passes;
   - both turns report the same session id;
   - `totals.cost_usd_key_delta` > 0;
-  - the token totals are non-zero and equal the sums of the per-message tokens in `opencode.db`.
+  - the token totals are non-zero and, after the output+reasoning conversion above, equal the sums of the per-message tokens in `opencode.db`.
 - **AC-14** (unit) Parsing the fixtures committed from the AC-12 and AC-13 runs:
   - every line of `trace.jsonl` validates against the JSON Schema;
   - the first `user` message of each turn contains that turn's prompt text with leading and trailing whitespace stripped;
   - `tool_call` events carry their outputs;
-  - for one response per harness with cached input, the `usage` event's token fields equal values computed by hand under the token definitions.
+  - for one response per harness with cached input, the `usage` event's token fields equal values computed by hand under the token definitions;
+  - the OpenCode fixtures include one response with non-zero reasoning tokens, whose `usage` event's `output_tokens` and `reasoning_tokens` follow the mapping above.
 - **AC-15** (unit) Key-usage logic, tested with HTTP and the clock mocked:
   - the delta is computed correctly;
   - settling stops when the value exceeds `before` and two consecutive reads agree;
@@ -316,8 +319,10 @@ Where a harness or provider counts cached tokens inside its input figure, the ad
   - failed, timed-out and interrupted turns still get `key_usage.after`;
   - `totals.cost_usd_key_delta` is `null` when one turn's delta is `null`;
   - a non-OpenRouter provider gives `key_usage: null`.
-- **AC-16** (live) For both harnesses, a prompt that tells the agent to ask the user a clarifying question completes within the timeout without waiting for input, and `result.json` shows the turn as completed or failed, not timed out.
-- **AC-17** (unit) `README.md` documents `ahl run`, its exit codes, its status and reason codes, and its run directory. `docs/trace-schema.md` documents the trace schema and the token definitions. A test checks that the schema file and the document list the same event types and fields.
+- **AC-16** (live) For both harnesses, the AC-12/AC-13 smoke scenario with an added instruction to ask the user a clarifying question completes within `--timeout`, without waiting for input, with evidence the model actually handled the prompt: `trace.jsonl` has at least one `assistant` message for the turn.
+  - `completed` passes.
+  - `failed` passes only when the reason names the question tool's denial (the disallowed/denied ask-user tool), not `provider_error`, `infra`, or a startup failure (missing key, image build, container start) — each of those fails the test.
+- **AC-17** (unit) `docs/trace-schema.md` documents the trace schema and the token definitions. A test checks that the schema file and the document list the same event types and fields.
 
 ## Test plan
 
@@ -344,3 +349,4 @@ Where a harness or provider counts cached tokens inside its input figure, the ad
 - The AC-12, AC-13 and AC-16 commands, with abridged `result.json` and cost.
 - Output of `uv run pytest -m docker` covering AC-5 to AC-7.
 - The fixture files committed.
+- `README.md` documents `ahl run`, its exit codes, its status and reason codes, and its run directory.

@@ -90,7 +90,7 @@ AHL supports OpenAI's Codex CLI as a harness, authenticated through OpenRouter. 
   - no request is rejected because of `store` or `previous_response_id`: no such 400 error appears in stderr or the trace;
   - `totals.cost_usd_key_delta` > 0.
 - **AC-8** (live) A one-turn `ahl run` with a mounted fixture skill whose `SKILL.md` holds a marker string, and a prompt that asks for that skill, produces an assistant message containing the marker.
-- **AC-9** (unit) `README.md` and `config.example.yaml` document the Codex harness. A test asserts `codex` appears in both.
+- **AC-9** (unit) A `config.example.yaml`-style config with `harness: codex`, `provider: openrouter` and a model loads without error through `load_config`.
 
 ## Test plan
 
@@ -111,3 +111,4 @@ AHL supports OpenAI's Codex CLI as a harness, authenticated through OpenRouter. 
 - The `token_count` deduplication method.
 - The AC-7 and AC-8 commands with abridged `result.json` and cost.
 - The spike result.
+- `README.md` and `config.example.yaml` document the Codex harness.

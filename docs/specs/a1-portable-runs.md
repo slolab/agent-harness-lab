@@ -120,7 +120,7 @@ packages:
   - Unit tier: the generated install command contains the shell-quoted requirement (`'<container path>[graph]'`), for both the `uv tool install` and the `uv pip install` path.
   - Docker tier: a small fixture package without console scripts, whose extra pulls in one PyPI dependency, is installed, and the container's `python3` imports that dependency.
 - **AC-12** (unit) Existing behaviour is preserved. Run from the AHL checkout with `./config.yaml`, `ahl up` reads `./.env` and writes to `./runs/`. All existing tests pass, changed only where they referenced the old `docker/` path.
-- **AC-13** (unit) `README.md` and `config.example.yaml` document `--env-file`, `--runs-dir`, `ahl build`, `mounts`, `network`, `env` and `extras`. A test asserts each of these names appears in both files.
+- **AC-13** (unit) `config.example.yaml` demonstrates `mounts`, `network`, `env` and `packages[].extras`, and loads without error through `load_config`, with its paths resolved relative to its own directory.
 
 ## Test plan
 
@@ -142,3 +142,4 @@ packages:
 - The wheel file listing showing `ahl/images/`.
 - The result of building the DeepSeek image from the moved context.
 - Output of `uv run pytest -m docker`.
+- `README.md` and `config.example.yaml` document `--env-file`, `--runs-dir`, `ahl build`, `mounts`, `network`, `env` and `extras`.
