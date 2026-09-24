@@ -18,8 +18,8 @@ __pycache__/
 /.eggs/
 /*.log
 *.lock
+!/uv.lock
 biocypher-log/
 /build/
 /mappings/
-/uv.lock
 .planning
