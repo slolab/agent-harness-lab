@@ -27,3 +27,9 @@ packages = ["src/ahl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Unit tests run by default and in CI. Opt in with `-m docker` or `-m live`.
+addopts = "--strict-markers -m 'not docker and not live'"
+markers = [
+    "docker: builds images or starts containers; local only",
+    "live: calls a real provider and spends credit; local only, never CI",
+]
