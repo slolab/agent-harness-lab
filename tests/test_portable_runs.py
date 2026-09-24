@@ -53,6 +53,8 @@ def docker(monkeypatch):
         if args[:2] == ["docker", "build"]:
             state.build_envs.append(kwargs.get("env"))
         if args[:3] == ["docker", "image", "inspect"]:
+            if state.image_id is None:
+                return subprocess.CompletedProcess(args, 1, "", f"Error response from daemon: No such image: {args[3]}")
             info = [{"Id": state.image_id, "Config": {"Labels": state.labels}}]
             return subprocess.CompletedProcess(args, 0, json.dumps(info), "")
         if args[:3] == ["docker", "network", "inspect"]:
@@ -245,6 +247,12 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
     assert session["harness"] == "opencode" and session["run_id"] == "built"
 
     write_config(config, **OPENROUTER, packages=[{"name": "lib", "install": "copy", "path": "./lib"}])
+    docker.image_id = None
+    missing = ahl_cli("up", "-c", config, "--no-build", "--name", "unlabelled")
+
+    assert missing.exit_code == 1 and "ahl build --harness opencode" in missing.output
+    assert not (tmp_path / "runs/unlabelled").exists()
+
     docker.image_id = "sha256:" + "cd" * 32
     docker.labels = {"ahl.harness": "opencode"}
     docker.git = False

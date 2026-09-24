@@ -78,6 +78,9 @@ def up(
     _ensure_docker()
     if run_config.network:
         _check_network(run_config.network)
+    if build:
+        _build_image(run_config.harness.name)
+    image = _image_record(run_config.harness.name)
 
     runs_root = runs_dir.expanduser().resolve() if runs_dir else run_config.root / "runs"
     if resume:
@@ -100,9 +103,6 @@ def up(
         workspace_dir = resolve_workspace(run_dir, run_config.workspace, resume=bool(resume))
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
-
-    if build:
-        _build_image(run_config.harness.name)
 
     adapter = get_adapter(run_config.harness.name)
     container_name = f"ahl-{run_id}"
@@ -137,7 +137,6 @@ def up(
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    image = _image_record(run_config.harness.name)
     use_copy_flow = bool(package_copies)
     args = docker_run_args(
         run_config,
