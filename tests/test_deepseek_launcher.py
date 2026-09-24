@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-LAUNCHER = Path(__file__).resolve().parents[1] / "docker/deepseek/ahl-deepseek.cjs"
+LAUNCHER = Path(__file__).resolve().parents[1] / "src/ahl/images/deepseek/ahl-deepseek.cjs"
 
 
 @pytest.fixture

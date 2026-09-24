@@ -13,6 +13,7 @@ def test_docker_run_args_assembles_mounts_and_env(make_config, tmp_path: Path):
         config,
         {"ANTHROPIC_API_KEY": "test-key"},
         workspace_dir,
+        image="agent-harness-lab:claude",
         name="ahl-test",
         extra_volumes=extra,
         readonly_volumes=[(tmp_path / "skill", "/workspace/.claude/skills/my-skill")],
@@ -39,6 +40,7 @@ def test_docker_run_args_setup_commands_chain_into_exec_bash(make_config, tmp_pa
         config,
         {"ANTHROPIC_API_KEY": "test-key"},
         tmp_path / "ws",
+        image="agent-harness-lab:claude",
         setup_commands=["uv tool install --quiet --editable /opt/ahl-packages/foo"],
     )
 
@@ -54,6 +56,7 @@ def test_docker_run_args_detached_hold_uses_sleep_infinity(make_config, tmp_path
         config,
         {"ANTHROPIC_API_KEY": "test-key"},
         tmp_path / "ws",
+        image="agent-harness-lab:claude",
         name="ahl-test",
         detached=True,
         hold=True,

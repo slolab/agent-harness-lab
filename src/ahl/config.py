@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -13,11 +14,14 @@ from ahl.permissions import PermissionPolicy, parse_permissions
 
 if TYPE_CHECKING:
     from ahl.capabilities import Capability
+    from ahl.mounts import Mount
     from ahl.packages import Package
     from ahl.workspace import Workspace
 
 
 SUPPORTED_HARNESSES = {"claude", "claude-science", "opencode", "agy", "gemini", "deepseek"}
+HARNESS_NPM_PACKAGES = {"claude": "@anthropic-ai/claude-code", "opencode": "opencode-ai"}
+EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?")
 
 
 def uses_account_login(harness: str, provider: str) -> bool:
@@ -59,11 +63,15 @@ class Named:
 class RunConfig:
     root: Path
     harness: Named
+    harness_version: str | None
     provider: Named
     model: Named
     workspace: "Workspace"
     capabilities: list["Capability"]
     packages: list["Package"]
+    mounts: list["Mount"]
+    network: str | None
+    env: dict[str, str]
     permissions: PermissionPolicy = PermissionPolicy()
 
     @property
@@ -71,22 +79,47 @@ class RunConfig:
         return PROVIDER_KEY_ENV[self.provider.name]
 
 
-def load_config(config_path: Path) -> RunConfig:
+def resolve_config_path(value: str, root: Path) -> Path:
+    return (root / Path(value).expanduser()).resolve()
+
+
+def read_config(config_path: Path) -> dict[str, Any]:
     config_path = config_path.expanduser().resolve()
     if not config_path.exists():
         raise ConfigError(f"Missing config file: {config_path}")
-
-    root = config_path.parent
-    load_dotenv(root / ".env")
     raw = yaml.safe_load(config_path.read_text()) or {}
     if not isinstance(raw, dict):
         raise ConfigError("Config root must be a mapping")
+    return raw
 
-    harness = _parse_named(raw.get("harness"), "harness")
+
+def parse_harness(value: Any) -> Named:
+    harness = _parse_named(value, "harness")
     if harness.name not in SUPPORTED_HARNESSES:
         allowed = ", ".join(sorted(SUPPORTED_HARNESSES))
         raise ConfigError(f"Unsupported harness '{harness.name}'. Expected one of: {allowed}")
+    return harness
 
+
+def parse_harness_version(value: Any, harness: str) -> str | None:
+    if value is None:
+        return None
+    if harness not in HARNESS_NPM_PACKAGES:
+        allowed = " and ".join(sorted(HARNESS_NPM_PACKAGES))
+        raise ConfigError(f"harness_version: only {allowed} accept a version, not '{harness}'")
+    if not isinstance(value, str) or not EXACT_VERSION.fullmatch(value):
+        raise ConfigError(f"harness_version: expected an exact version such as 2.1.273, got {value!r}")
+    return value
+
+
+def load_config(config_path: Path, env_file: Path | None = None) -> RunConfig:
+    config_path = config_path.expanduser().resolve()
+    raw = read_config(config_path)
+    root = config_path.parent
+    env_source = _load_env(root, env_file)
+
+    harness = parse_harness(raw.get("harness"))
+    harness_version = parse_harness_version(raw.get("harness_version"), harness.name)
     provider = _parse_named(raw.get("provider"), "provider")
     if provider.name not in PROVIDER_KEY_ENV:
         allowed = ", ".join(sorted(PROVIDER_KEY_ENV))
@@ -121,39 +154,89 @@ def load_config(config_path: Path) -> RunConfig:
 
     key_env = PROVIDER_KEY_ENV[provider.name]
     if not uses_account_login(harness.name, provider.name) and not os.getenv(key_env):
-        raise ConfigError(
-            f"Missing API key env {key_env}. Add it to {root / '.env'} or your shell."
-        )
+        if env_source:
+            where = f"it is set neither in {env_source} nor in your shell"
+        else:
+            where = f"no env file was read (none at {root / '.env'}) and your shell does not set it"
+        raise ConfigError(f"Missing API key env {key_env}: {where}.")
+
+    network = raw.get("network")
+    if network is not None and (not isinstance(network, str) or not network):
+        raise ConfigError("'network' must be the name of an existing Docker network")
 
     from ahl.capabilities import parse_capabilities
+    from ahl.mounts import parse_mounts
     from ahl.packages import parse_packages
     from ahl.workspace import parse_workspace
 
-    workspace = parse_workspace(raw.get("workspace"), root)
-    capabilities = parse_capabilities(raw.get("capabilities"), root)
-    packages = parse_packages(raw.get("packages"), root)
-
-    return RunConfig(
+    config = RunConfig(
         root=root,
         harness=harness,
+        harness_version=harness_version,
         provider=provider,
         model=model,
-        workspace=workspace,
-        capabilities=capabilities,
-        packages=packages,
+        workspace=parse_workspace(raw.get("workspace"), root),
+        capabilities=parse_capabilities(raw.get("capabilities"), root),
+        packages=parse_packages(raw.get("packages"), root),
+        mounts=parse_mounts(raw.get("mounts"), root),
+        network=network,
+        env=_parse_env(raw.get("env")),
         permissions=parse_permissions(raw.get("permissions", {})),
     )
+    _reject_managed_env(config)
+    return config
 
 
-def load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
+def _load_env(root: Path, env_file: Path | None) -> Path | None:
+    if env_file is not None:
+        path = env_file.expanduser().resolve()
+        if not path.is_file():
+            raise ConfigError(f"Env file not found: {path}")
+        load_dotenv(path, override=True)
+        return path
+    default = root / ".env"
+    if default.is_file():
+        load_dotenv(default)
+        return default
+    return None
+
+
+def load_dotenv(path: Path, *, override: bool = False) -> None:
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if override:
+            os.environ[key] = value
+        else:
+            os.environ.setdefault(key, value)
+
+
+def _parse_env(raw: Any) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError("'env' must be a mapping of variable names to string values")
+    for name, value in raw.items():
+        if not isinstance(value, str):
+            raise ConfigError(f"env.{name}: value must be a string, got {type(value).__name__}")
+    return dict(raw)
+
+
+def _reject_managed_env(config: RunConfig) -> None:
+    from ahl.harnesses import get_adapter
+
+    if not config.env:
+        return
+    managed = set(PROVIDER_KEY_ENV.values()) | set(get_adapter(config.harness.name).build_env(config))
+    for name in config.env:
+        if name in managed:
+            raise ConfigError(
+                f"env.{name}: AHL sets this variable for harness '{config.harness.name}'"
+                f" with provider '{config.provider.name}'; remove it from 'env'"
+            )
 
 
 def _parse_named(value: Any, key: str) -> Named:

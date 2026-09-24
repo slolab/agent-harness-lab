@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 import json
-import subprocess
 
 import pytest
 from typer.testing import CliRunner
@@ -116,20 +115,6 @@ def test_deepseek_policy_reconciles_root_plugin_and_native_overrides(
         assert ("requires DEEPSEEK_API_KEY" in hints) == ("websearch" not in denied)
 
 
-@pytest.fixture
-def docker_stub(monkeypatch, tmp_path):
-    (tmp_path / "workspace").mkdir()
-    calls = []
-    monkeypatch.setattr(cli, "_ensure_docker", lambda: None)
-
-    def run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0)
-
-    monkeypatch.setattr(cli.subprocess, "run", run)
-    return calls
-
-
 @pytest.mark.parametrize(
     "harness,provider",
     [
@@ -140,8 +125,9 @@ def docker_stub(monkeypatch, tmp_path):
     ],
 )
 def test_unsupported_policy_warns_launches_and_records_gap(
-    make_config, tmp_path, docker_stub, harness, provider
+    make_config, tmp_path, docker, harness, provider
 ):
+    (tmp_path / "workspace").mkdir()
     make_config(
         harness=harness,
         provider=provider,
@@ -158,7 +144,7 @@ def test_unsupported_policy_warns_launches_and_records_gap(
     ]
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0, result.output
-    assert len(docker_stub) == 1 and docker_stub[0][:2] == ["docker", "run"]
+    assert len(docker.launches()) == 1
     warnings = [
         line for line in result.output.splitlines() if "permissions not applied" in line
     ]
@@ -189,8 +175,9 @@ def test_unsupported_policy_warns_launches_and_records_gap(
 
 
 def test_cli_handler_composition_and_resume_metadata(
-    make_config, tmp_path, monkeypatch, docker_stub
+    make_config, tmp_path, monkeypatch, docker
 ):
+    (tmp_path / "workspace").mkdir()
     adapter = get_adapter("claude")
 
     class FakeHandler:
@@ -224,7 +211,7 @@ def test_cli_handler_composition_and_resume_metadata(
             "applied": sorted(denied),
             "unsupported": {},
         }
-        assert f"{root}/fake-policy.json:/fake-policy.json:ro" in docker_stub[-1]
+        assert f"{root}/fake-policy.json:/fake-policy.json:ro" in docker.launches()[-1]
         assert json.loads((root / "fake-policy.json").read_text()) == sorted(denied)
         if i == 0:
             started = meta["started_at"]
@@ -235,8 +222,9 @@ def test_cli_handler_composition_and_resume_metadata(
 
 
 def test_invalid_handler_results_and_io_errors_never_launch(
-    make_config, tmp_path, monkeypatch, docker_stub
+    make_config, tmp_path, monkeypatch, docker
 ):
+    (tmp_path / "workspace").mkdir()
     make_config(extra={"permissions": {"deny": ["webfetch"]}})
 
     class BadHandler:
@@ -274,7 +262,7 @@ def test_invalid_handler_results_and_io_errors_never_launch(
         assert result.exit_code != 0
         assert not (tmp_path / f"runs/bad-{i}/session.json").exists()
     assert handler.calls == len(invalid)
-    assert docker_stub == []
+    assert docker.launches() == []
 
 
 @pytest.mark.parametrize(

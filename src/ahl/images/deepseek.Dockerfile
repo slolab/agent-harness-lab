@@ -10,6 +10,8 @@ RUN npm ci --omit=dev
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ARG HARNESS_VERSION
+LABEL ahl.harness=deepseek ahl.harness.version=${HARNESS_VERSION:?required}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git python3 \

@@ -1,19 +1,89 @@
 from __future__ import annotations
 
+import io
+import json
+import subprocess
+import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
-from ahl.config import RunConfig, load_config
+from ahl.config import HARNESS_NPM_PACKAGES, PROVIDER_KEY_ENV, RunConfig, load_config
+
+_real_run = subprocess.run
+NPM_RELEASES = {"@anthropic-ai/claude-code": "2.1.281", "opencode-ai": "1.18.32"}
+
+
+@pytest.fixture(autouse=True)
+def provider_keys_restored(monkeypatch: pytest.MonkeyPatch):
+    for key in PROVIDER_KEY_ENV.values():
+        # setenv registers an unset key, so teardown also removes values load_dotenv writes into os.environ.
+        monkeypatch.setenv(key, "")
+        monkeypatch.delenv(key)
+
+
+def unpinned_build_labels(harness: str) -> dict[str, str]:
+    package = HARNESS_NPM_PACKAGES.get(harness)
+    return {"ahl.harness": harness} | ({"ahl.harness.version": NPM_RELEASES[package]} if package else {})
+
+
+@dataclass
+class DockerStub:
+    calls: list[list[str]] = field(default_factory=list)
+    build_envs: list[dict[str, str] | None] = field(default_factory=list)
+    networks: set[str] = field(default_factory=set)
+    image_id: str | None = "sha256:" + "ab" * 32
+    labels: dict[str, str] | None = None
+    ahl_tracked: bool = True
+    registry_requests: list[str] = field(default_factory=list)
+
+    def __call__(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if args[0] == "git":
+            if self.ahl_tracked or "ls-files" not in args:
+                return _real_run(args, **kwargs)
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(1, args)
+            return subprocess.CompletedProcess(args, 1, "", "error: pathspec did not match any file(s) known to git")
+        self.calls.append(args)
+        if args[:2] == ["docker", "build"]:
+            self.build_envs.append(kwargs.get("env"))
+        if args[:3] == ["docker", "image", "inspect"]:
+            if self.image_id is None:
+                return subprocess.CompletedProcess(args, 1, "", f"Error response from daemon: No such image: {args[3]}")
+            harness = args[3].removeprefix("agent-harness-lab:")
+            labels = self.labels if self.labels is not None else unpinned_build_labels(harness)
+            info = [{"Id": self.image_id, "Config": {"Labels": labels}}]
+            return subprocess.CompletedProcess(args, 0, json.dumps(info), "")
+        if args[:3] == ["docker", "network", "inspect"]:
+            return subprocess.CompletedProcess(args, 0 if args[3] in self.networks else 1, "[]", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def urlopen(self, url: str, **kwargs: Any) -> io.BytesIO:
+        self.registry_requests.append(url)
+        package = url.removeprefix("https://registry.npmjs.org/").removesuffix("/latest")
+        return io.BytesIO(json.dumps({"version": NPM_RELEASES[package]}).encode())
+
+    def launches(self) -> list[list[str]]:
+        return [c for c in self.calls if c[:2] == ["docker", "run"]]
+
+    def builds(self) -> list[list[str]]:
+        return [c for c in self.calls if c[:2] == ["docker", "build"]]
+
+
+@pytest.fixture
+def docker(monkeypatch: pytest.MonkeyPatch) -> DockerStub:
+    stub = DockerStub()
+    monkeypatch.setattr(subprocess, "run", stub)
+    monkeypatch.setattr(urllib.request, "urlopen", stub.urlopen)
+    return stub
 
 
 @pytest.fixture
 def make_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Load a temporary config with synthetic credentials, isolated from the host."""
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
 
     def _make(
         *,
