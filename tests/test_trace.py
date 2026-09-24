@@ -48,7 +48,7 @@ def test_a2_ac8_recorded_runs_give_valid_traces_with_prompts_outputs_and_tokens(
             db.executescript((run / "opencode.sql").read_text())
     turns = json.loads((run / "turns.json").read_text())
 
-    write_trace(run, get_adapter(harness).driver, turns)
+    write_trace(run, get_adapter(harness).driver.trace(run), turns)
 
     events = [json.loads(line) for line in (run / "trace.jsonl").read_text().splitlines()]
     validator = jsonschema.Draft202012Validator(schema(), format_checker=jsonschema.FormatChecker())

@@ -78,15 +78,9 @@ paths behave as in `ahl up`; a relative `--turn` resolves against the working
 directory, and a `--name` whose run directory exists is a usage error. After a
 turn that does not complete, the remaining turns are skipped.
 
-No session can wait for input. Tools run without permission prompts and the
-ask-user tool is denied. Claude Code runs as root with `IS_SANDBOX=1`,
-`--dangerously-skip-permissions` and `--disallowedTools AskUserQuestion`,
-resuming turn 1's session with `--resume`; with OpenRouter, every model alias
-(`ANTHROPIC_DEFAULT_*_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
-`CLAUDE_CODE_SUBAGENT_MODEL`) resolves to the configured model. OpenCode runs
-`opencode run --format json`, resuming with `--session`, and receives an
-explicit value for every permission key of its pinned version through
-`OPENCODE_PERMISSION`: `allow`, except `question` and any denied web tool.
+No session can wait for input: tools run without permission prompts, the
+ask-user tool is denied, and with OpenRouter every Claude Code model alias
+resolves to the configured model.
 
 | Exit | Run `status` | Reason codes | When |
 |---|---|---|---|

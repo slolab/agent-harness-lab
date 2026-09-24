@@ -94,6 +94,15 @@ def prepare_run(
     )
 
 
+def write_native_trace(run: PreparedRun) -> Path | None:
+    trace = run.adapter.parse_trace(run.dir)
+    if trace is None:
+        return None
+    path = run.dir / "trace.json"
+    path.write_text(json.dumps(trace, indent=2, sort_keys=True))
+    return path
+
+
 def start_container(run: PreparedRun) -> None:
     subprocess.run(run.docker_args, check=True, stdout=subprocess.DEVNULL)
     for copy in run.package_copies:

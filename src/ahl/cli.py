@@ -25,7 +25,7 @@ from ahl.config import (
 from ahl.docker import CONTAINER_WORKSPACE, IMAGES_DIR, docker_daemon_unreachable, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
 from ahl.headless import run_headless
-from ahl.runs import PreparedRun, prepare_run, start_container
+from ahl.runs import PreparedRun, prepare_run, start_container, write_native_trace
 
 app = typer.Typer(no_args_is_help=True)
 VERSIONED_HARNESSES = {*HARNESS_NPM_PACKAGES, "deepseek"}
@@ -121,10 +121,7 @@ def up(
         pass
     finally:
         subprocess.run(["docker", "rm", "-f", run.container], capture_output=True, check=False)
-        trace = run.adapter.parse_trace(run_dir)
-        if trace is not None:
-            trace_path = run_dir / "trace.json"
-            trace_path.write_text(json.dumps(trace, indent=2, sort_keys=True))
+        if trace_path := write_native_trace(run):
             typer.echo(f"Trace: {trace_path}")
 
 

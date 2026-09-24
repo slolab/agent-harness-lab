@@ -15,7 +15,7 @@ import typer
 from ahl import keyusage
 from ahl.docker import CONTAINER_WORKSPACE, docker_daemon_unreachable
 from ahl.harnesses.base import TurnReport, provider_key
-from ahl.runs import PreparedRun, start_container
+from ahl.runs import PreparedRun, start_container, write_native_trace
 from ahl.trace import token_totals, write_trace
 
 EXIT_CODES = {"completed": 0, "failed": 1, "error": 3, "timeout": 124, "interrupted": 130}
@@ -63,10 +63,8 @@ class _HeadlessRun:
         if started:
             self._teardown()
         status, reason = self._settle_statuses(failure)
-        trace = self.run.adapter.parse_trace(self.run.dir)
-        if trace is not None:
-            (self.run.dir / "trace.json").write_text(json.dumps(trace, indent=2, sort_keys=True))
-        events = write_trace(self.run.dir, self.driver, self.turns)
+        write_native_trace(self.run)
+        events = write_trace(self.run.dir, self.driver.trace(self.run.dir), self.turns)
         (self.run.dir / "result.json").write_text(json.dumps(self._result(status, reason, events), indent=2))
         code = f" ({reason['code']})" if reason else ""
         typer.echo(f"Result: {status}{code} -> {self.run.dir / 'result.json'}")

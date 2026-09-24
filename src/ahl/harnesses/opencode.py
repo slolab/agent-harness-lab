@@ -48,7 +48,6 @@ class OpenCodePermissions:
         applied = policy.deny & WEB_PERMISSIONS
         path = _config_dir(run_dir) / "opencode.json"
         settings = json.loads(path.read_text())
-        settings.pop("permission", None)
         if applied:
             settings["permission"] = dict.fromkeys(sorted(applied), "deny")
         path.write_text(json.dumps(settings, indent=2) + "\n")
