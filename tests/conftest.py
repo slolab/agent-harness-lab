@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 import yaml
 
-from ahl.config import PROVIDER_KEY_ENV, RunConfig, load_config
+from ahl.config import HARNESS_NPM_PACKAGES, PROVIDER_KEY_ENV, RunConfig, load_config
 
 _real_run = subprocess.run
 NPM_RELEASES = {"@anthropic-ai/claude-code": "2.1.281", "opencode-ai": "1.18.32"}
@@ -25,13 +25,18 @@ def provider_keys_restored(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(key)
 
 
+def unpinned_build_labels(harness: str) -> dict[str, str]:
+    package = HARNESS_NPM_PACKAGES.get(harness)
+    return {"ahl.harness": harness} | ({"ahl.harness.version": NPM_RELEASES[package]} if package else {})
+
+
 @dataclass
 class DockerStub:
     calls: list[list[str]] = field(default_factory=list)
     build_envs: list[dict[str, str] | None] = field(default_factory=list)
     networks: set[str] = field(default_factory=set)
     image_id: str | None = "sha256:" + "ab" * 32
-    labels: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] | None = None
     ahl_tracked: bool = True
     registry_requests: list[str] = field(default_factory=list)
 
@@ -48,7 +53,9 @@ class DockerStub:
         if args[:3] == ["docker", "image", "inspect"]:
             if self.image_id is None:
                 return subprocess.CompletedProcess(args, 1, "", f"Error response from daemon: No such image: {args[3]}")
-            info = [{"Id": self.image_id, "Config": {"Labels": self.labels}}]
+            harness = args[3].removeprefix("agent-harness-lab:")
+            labels = self.labels if self.labels is not None else unpinned_build_labels(harness)
+            info = [{"Id": self.image_id, "Config": {"Labels": labels}}]
             return subprocess.CompletedProcess(args, 0, json.dumps(info), "")
         if args[:3] == ["docker", "network", "inspect"]:
             return subprocess.CompletedProcess(args, 0 if args[3] in self.networks else 1, "[]", "")

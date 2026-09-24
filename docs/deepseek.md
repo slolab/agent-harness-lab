@@ -77,7 +77,8 @@ selected by the CLI's published ranges. Builds use `npm ci --omit=dev` and
 retain optional native packages for Linux arm64 and amd64. Upgrading requires
 rechecking the actual installed persistence, settings, and browser contracts.
 `ahl build` reads the CLI version from the lock and records it in the image's
-`ahl.harness.version` label.
+`ahl.harness.version` label. A direct `docker build` must pass it as the
+`HARNESS_VERSION` build argument, as in the commands below.
 
 ## Native trace summary
 
@@ -119,8 +120,9 @@ boundaries, and real Node relay sockets/process cleanup. Run:
 ```bash
 uv run pytest
 uv run ruff check .
-docker build --platform linux/arm64 -t agent-harness-lab:deepseek -f src/ahl/images/deepseek.Dockerfile src/ahl/images
-docker build --platform linux/amd64 -t agent-harness-lab:deepseek-amd64 -f src/ahl/images/deepseek.Dockerfile src/ahl/images
+DSH_VERSION=$(node -p "require('./src/ahl/images/deepseek/package-lock.json').packages['node_modules/@deepseek-ai/dsh'].version")
+docker build --platform linux/arm64 --build-arg HARNESS_VERSION=$DSH_VERSION -t agent-harness-lab:deepseek -f src/ahl/images/deepseek.Dockerfile src/ahl/images
+docker build --platform linux/amd64 --build-arg HARNESS_VERSION=$DSH_VERSION -t agent-harness-lab:deepseek-amd64 -f src/ahl/images/deepseek.Dockerfile src/ahl/images
 ```
 
 For a browser smoke test, check the token URL and subsequent clean URL,

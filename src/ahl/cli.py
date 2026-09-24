@@ -14,6 +14,7 @@ from typing import Annotated, Any, NoReturn
 import typer
 
 from ahl.config import (
+    EXACT_VERSION,
     HARNESS_NPM_PACKAGES,
     ConfigError,
     RunConfig,
@@ -30,6 +31,7 @@ from ahl.skills import wire_delegated_skills
 from ahl.workspace import resolve_workspace
 
 app = typer.Typer(no_args_is_help=True)
+VERSIONED_HARNESSES = {*HARNESS_NPM_PACKAGES, "deepseek"}
 
 
 @app.callback()
@@ -100,7 +102,7 @@ def up(
         _check_network(run_config.network)
     if build:
         _build_image(run_config.harness.name, run_config.harness_version)
-    image = _image_record(run_config.harness.name)
+    image = _image_record(run_config.harness.name, run_config.harness_version, config)
 
     if not resume:
         try:
@@ -386,7 +388,7 @@ def _check_network(network: str) -> None:
         raise typer.BadParameter(f"network: Docker network '{network}' does not exist")
 
 
-def _image_record(harness: str) -> dict[str, Any]:
+def _image_record(harness: str, pinned: str | None, config: Path) -> dict[str, Any]:
     image = image_name(harness)
     result = subprocess.run(
         ["docker", "image", "inspect", image], capture_output=True, text=True, check=False
@@ -400,8 +402,15 @@ def _image_record(harness: str) -> dict[str, Any]:
         )
         raise typer.Exit(1)
     [info] = json.loads(result.stdout)
-    labels = info["Config"].get("Labels") or {}
-    return {"name": image, "id": info["Id"], "harness_version": labels.get("ahl.harness.version")}
+    installed = (info["Config"].get("Labels") or {}).get("ahl.harness.version")
+    rebuild = f"Rebuild it with `ahl build -c {config}`."
+    if harness in VERSIONED_HARNESSES and not EXACT_VERSION.fullmatch(installed or ""):
+        raise typer.BadParameter(
+            f"{image} records no exact {harness} version (ahl.harness.version={installed!r}). {rebuild}"
+        )
+    if pinned and installed != pinned:
+        raise typer.BadParameter(f"harness_version: {image} has {harness} {installed}, not {pinned}. {rebuild}")
+    return {"name": image, "id": info["Id"], "harness_version": installed}
 
 
 def _ahl_record() -> dict[str, Any]:

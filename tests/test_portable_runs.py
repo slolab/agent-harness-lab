@@ -209,6 +209,19 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
     assert docker.image_id in docker.launches()[-1] and session["image"]["name"] not in docker.launches()[-1]
     assert session["harness"] == "opencode" and session["run_id"] == "built"
 
+    unpinned = write_config(tmp_path / "unpinned.yaml", **OPENROUTER)
+    for path, label in [
+        (config, {"ahl.harness.version": "1.18.32"}),
+        (unpinned, {}),
+        (unpinned, {"ahl.harness.version": "latest"}),
+    ]:
+        docker.labels = {"ahl.harness": "opencode", **label}
+        stale = ahl_cli("up", "-c", path, "--no-build", "--name", "stale")
+
+        assert stale.exit_code == 2 and "Rebuild" in stale.output, stale.output
+        assert not (tmp_path / "runs/stale").exists()
+    assert len(docker.launches()) == 1
+
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     write_config(config, harness="gemini", provider="gemini", packages=[{"name": "lib", "install": "copy", "path": "./lib"}])
     docker.image_id = None

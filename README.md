@@ -54,6 +54,9 @@ ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
   with `-c` it reads only `harness` and `harness_version`. `ahl up` builds the
   same way unless you pass `--no-build`. Builds skip BuildKit's default
   attestations, so a rebuild without changes keeps the image ID.
+- `ahl up` refuses a Claude Code, OpenCode or DeepSeek image whose
+  `ahl.harness.version` label is not an exact version, or differs from the
+  config's `harness_version`. Rebuild it with `ahl build -c CONFIG`.
 - `--env-file PATH` loads that file, and its keys win over shell variables.
   A missing file is an error. Without the flag, `ahl up` reads `.env` next to
   the config, and shell variables win over it.
@@ -162,8 +165,9 @@ adapter — see `CLAUDE.md`.
 No Dockerfile hard-codes a harness version. For Claude Code and OpenCode,
 `ahl build` installs the config's `harness_version`, or else the current npm
 release, which it looks up before building. DeepSeek installs the version in
-its npm lockfile. The version is passed as the `HARNESS_VERSION` build argument
-and recorded in the image label `ahl.harness.version`. Gemini CLI, agy and
+its npm lockfile. The version is passed as the `HARNESS_VERSION` build argument,
+which these three Dockerfiles require, and recorded in the image label
+`ahl.harness.version`. Gemini CLI, agy and
 Claude Science install their latest release and carry no version label. uv is
 not pinned. Every image carries the label `ahl.harness=<name>`.
 

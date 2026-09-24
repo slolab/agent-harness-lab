@@ -45,7 +45,7 @@ def test_a1_ac4_dockerfiles_hard_code_no_versions_and_label_every_image():
         )
         expected = {"ahl.harness": harness}
         if harness in {*PACKAGES, "deepseek"}:
-            expected["ahl.harness.version"] = "${HARNESS_VERSION}"
+            expected["ahl.harness.version"] = "${HARNESS_VERSION:?required}"
         assert labels == expected, harness
 
 
@@ -103,6 +103,10 @@ def ahl_up_in_pty(*args: str, cwd: Path, command: str, timeout: float = 900) -> 
 def test_a1_ac3_ac4_build_outside_checkout_installs_pinned_or_current_version(tmp_path, harness):
     image = f"agent-harness-lab:{harness}"
     (tmp_path / "pinned.yaml").write_text(yaml.safe_dump({"harness": harness, "harness_version": PINNED[harness]}))
+    direct = subprocess.run(
+        ["docker", "build", "-f", str(IMAGES / f"{harness}.Dockerfile"), str(IMAGES)], capture_output=True, text=True
+    )
+    assert direct.returncode != 0 and "HARNESS_VERSION" in direct.stderr, direct.stderr[-3000:]
 
     for flags, expected in [(["-c", "pinned.yaml"], PINNED[harness]), (["--harness", harness], current_release(harness))]:
         ids = []
