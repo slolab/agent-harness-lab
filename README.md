@@ -52,7 +52,8 @@ ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
 - `ahl build` builds `agent-harness-lab:<harness>` from the image files shipped
   inside the installed package. It needs no provider key and reads no env file;
   with `-c` it reads only `harness`. `ahl up` builds the same way unless you
-  pass `--no-build`.
+  pass `--no-build`. Builds skip BuildKit's default attestations, so a rebuild
+  without changes keeps the image ID.
 - `--env-file PATH` loads that file, and its keys win over shell variables.
   A missing file is an error. Without the flag, `ahl up` reads `.env` next to
   the config, and shell variables win over it.

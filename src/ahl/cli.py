@@ -259,6 +259,9 @@ def _build_image(harness: str) -> None:
         subprocess.run(
             ["docker", "build", "-t", image, "-f", str(dockerfile), str(IMAGES_DIR)],
             check=True,
+            # Default provenance attestations change the image ID on every build, even a cached one.
+            # Unlike --provenance=false, the variable also works with the legacy builder.
+            env={**os.environ, "BUILDX_NO_DEFAULT_ATTESTATIONS": "1"},
         )
     except FileNotFoundError:
         _fail_docker_missing()

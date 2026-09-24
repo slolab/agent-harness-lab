@@ -101,10 +101,14 @@ def ahl_up_in_pty(*args: str, cwd: Path, command: str, timeout: float = 900) -> 
 @pytest.mark.parametrize("harness", ["claude", "opencode"])
 def test_a1_ac3_ac4_build_outside_checkout_labels_installed_version(tmp_path, harness):
     image = f"agent-harness-lab:{harness}"
+    ids = []
 
-    result = ahl_process("build", "--harness", harness, cwd=tmp_path)
+    for _ in range(2):
+        result = ahl_process("build", "--harness", harness, cwd=tmp_path)
+        assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+        ids.append(docker("image", "inspect", "--format", "{{.Id}}", image))
 
-    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+    assert ids[0] == ids[1]
     labels = json.loads(docker("image", "inspect", "--format", "{{json .Config.Labels}}", image))
     installed = docker("run", "--rm", image, harness, "--version")
     assert labels["ahl.harness"] == harness

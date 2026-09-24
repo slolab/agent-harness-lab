@@ -35,6 +35,7 @@ def docker(monkeypatch):
     real_run = subprocess.run
     state = SimpleNamespace(
         calls=[],
+        build_envs=[],
         networks=set(),
         image_id="sha256:" + "ab" * 32,
         labels={},
@@ -49,6 +50,8 @@ def docker(monkeypatch):
                 raise subprocess.CalledProcessError(128, args)
             return subprocess.CompletedProcess(args, 128, "", "fatal: not a git repository")
         state.calls.append(args)
+        if args[:2] == ["docker", "build"]:
+            state.build_envs.append(kwargs.get("env"))
         if args[:3] == ["docker", "image", "inspect"]:
             info = [{"Id": state.image_id, "Config": {"Labels": state.labels}}]
             return subprocess.CompletedProcess(args, 0, json.dumps(info), "")
@@ -198,6 +201,7 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
     assert builds(docker) == [
         ["docker", "build", "-t", "agent-harness-lab:deepseek", "-f", str(dockerfile), str(IMAGES)]
     ]
+    assert docker.build_envs == [{**os.environ, "BUILDX_NO_DEFAULT_ATTESTATIONS": "1"}]
 
     (conf / ".env").write_text("OPENROUTER_API_KEY=must-not-load\n")
     assert ahl_cli("build", "--harness", "claude").exit_code == 0
