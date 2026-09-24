@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Agent Harness Lab (AHL) is a development/debug environment for testing skills and MCP servers against real agent harnesses (Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`, DeepSeek Harness) inside a Docker sandbox, driven by hand through an interactive shell. Key-based harnesses receive the selected provider key; Claude Code with `provider: anthropic` and Claude Science use account login; Claude Code also supports OpenRouter bearer credentials. **It is not a tool for driving a persistent real project** — the goal is isolated, repeatable, debuggable runs for people building capabilities, so the same starting state can be replayed across harnesses or capability versions (see "Workspace is a template" below). It is the first slice of a larger system described in `docs/specs.md`: an emulator-style lab for developing and evaluating our own MCP servers and skills against real harnesses, with isolation, observability, and (eventually) record/replay and step-debugging. Read `docs/specs.md` before any architectural change. `TODO` tracks the immediate next steps.
+Agent Harness Lab (AHL) is a development/debug environment for testing skills and MCP servers against real agent harnesses (Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`, DeepSeek Harness) inside a Docker sandbox, driven by hand through an interactive shell. Key-based harnesses receive the selected provider key; Claude Code with `provider: anthropic` and Claude Science use account login; Claude Code also supports OpenRouter bearer credentials. **It is not a tool for driving a persistent real project** — the goal is isolated, repeatable, debuggable runs for people building capabilities, so the same starting state can be replayed across harnesses or capability versions (see "Workspace is a template" below). It is the first slice of a larger system described in `docs/specs.md`: an emulator-style lab for developing and evaluating our own MCP servers and skills against real harnesses, with isolation, observability, and (eventually) record/replay and step-debugging. Read `docs/specs.md` before any architectural change. Planned work lives in GitHub issues and in milestone specs under `docs/specs/`.
 
 **Key architectural decision: no wire-level proxy.** Every harness already writes a full local record of its own LLM turns and tool calls (chat/session JSONL, `logs.json`, etc.) under its own home/config directory. AHL gets observability by mounting that directory and parsing it after (or during) a run — not by intercepting traffic between the harness and its provider or its MCP servers. Don't propose an LLM-plane or MCP-plane proxy/gateway; that approach was deliberately rejected as overkill. The corollary is that deterministic replay and live pause/mutate (described in `docs/specs.md` FR-F/FR-G) no longer have an obvious mechanism now that nothing sits on the wire — that's flagged as an open question in the spec, not solved.
 
@@ -15,7 +15,9 @@ uv sync --extra dev       # install deps incl. ruff/pytest (uv-managed venv)
 uv run ahl up             # build image (if needed) + launch sandbox shell for the configured harness
 uv run ahl up --no-build  # skip the docker build step
 uv run ruff check .       # lint (no [tool.ruff] config block yet)
-uv run pytest             # tests — no Docker needed; relay tests use Node.js and local sockets
+uv run pytest             # unit tests — no Docker needed; relay tests use Node.js and local sockets
+uv run pytest -m docker   # tests that build images or start containers (local only)
+uv run pytest -m live     # tests that call a real provider and spend credit (local only, never CI)
 ```
 
 Setup before first run:
@@ -49,7 +51,7 @@ Single Python package, `src/ahl/`, exposed via the `ahl` console script (Typer a
 - **Two-file config split**: `.env` is secrets-only, `config.yaml` is non-secret selection. Don't blend them.
 - **Per-run directory** (`runs/<id>/`): everything seeded for/produced by one container run lives there (harness home/config dirs, the resolved `workspace/` copy, `session.json`, `trace.json`). Keep new per-run artifacts under this directory rather than introducing new top-level state dirs.
 - **No proxy.** Observability is built by mounting and parsing each harness's own log/session directory, not by intercepting LLM or MCP traffic. See "Key architectural decision" above.
-- **Egress is currently unrestricted** (`docker/init-firewall.sh` is a deliberate passthrough). `TODO` sequences re-enabling default-deny egress (needs `--cap-add=NET_ADMIN`) after log-based observability lands for the remaining harnesses — don't quietly "fix" this without flagging it.
+- **Egress is currently unrestricted** (`docker/init-firewall.sh` is a deliberate passthrough). Re-enabling default-deny egress (needs `--cap-add=NET_ADMIN`) is deferred until log-based observability lands for the remaining harnesses — don't quietly "fix" this without flagging it.
 - **Tracked vs untracked**: `src/`, `docker/`, `docs/`, `pyproject.toml`, `config.example.yaml`, `.env.example` are tracked. `config.yaml`, `.env`, `runs/`, `projects/` are local state and stay untracked (see `.gitignore`).
 
 ## OpenRouter and DeepSeek extension points
@@ -84,3 +86,69 @@ Single Python package, `src/ahl/`, exposed via the `ahl` console script (Typer a
 - Claude mounts run-owned managed settings read-only. DeepSeek loads the
   image-owned global guard at host scope; native settings overrides must be
   reconciled on resume. Removing AHL rules must preserve unrelated native state.
+
+## Development workflow
+
+These rules apply to every agent and subagent. They are the same in `slolab/biotope-bench`; keep both copies in sync. The current milestones (A1–A3) belong to the biotope-bench roadmap, [`docs/roadmap.md`](https://github.com/slolab/biotope-bench/blob/main/docs/roadmap.md), with live status in [slolab/biotope-bench#1](https://github.com/slolab/biotope-bench/issues/1).
+
+### Roles
+
+| Role | Does |
+|---|---|
+| Orchestrator (main Claude session) | Writes specs, dispatches subagents, watches PRs, updates the tracking issue |
+| Implementer (subagent) | Builds one milestone in its own worktree and opens a draft PR |
+| Review agent (subagent, fresh context) | Reviews the PR against its spec and posts inline comments |
+| Finalizer (subagent) | Answers the review, gets CI green, completes the PR description, marks the PR ready |
+| Fix agent (subagent) | Addresses later review comments, one round at a time |
+| Vlad | Reviews specs before implementation, reviews PRs last, merges |
+
+### Branches, worktrees and PRs
+
+- Never commit to `main`. Only Vlad merges, by squash merge.
+- One milestone per branch, named `<id>-<slug>`, for example `a1-portable-runs`. Work in a worktree at `../.worktrees/<repo>/<branch>`, or use the Agent tool's worktree isolation.
+- Open a draft PR as soon as the branch has its first commit. Title it `<ID>: <title>` and fill in the PR template.
+- AHL PRs merge first. Bench then moves the `vendor/agent-harness-lab` submodule to a commit on AHL's `main`, never to an unmerged branch.
+- Use Conventional Commits that name the milestone, for example `feat(a1): resolve paths against the config file`.
+
+### Specs are the contract
+
+- Every milestone has a spec in `docs/specs/<id>-<slug>.md`. Vlad approves it by merging it to `main`, and from then on it is frozen.
+- Implement the spec as written. **Never weaken, drop or reinterpret an acceptance criterion to make progress.**
+- If a criterion is wrong, impossible or far harder than expected, stop. Post a PR comment starting `🤖 implementer: BLOCKED on AC-n` with the evidence and the options you see. The orchestrator takes it to Vlad.
+- A spec change goes in its own commit prefixed `spec-change:`, with the reason, and needs Vlad's explicit approval in the PR.
+- Findings outside the spec become new GitHub issues, not extra scope.
+
+### Tests first
+
+- Write the test for an acceptance criterion before the code that satisfies it. Name it after the criterion, for example `test_a1_ac3_runs_dir_override`.
+- Three tiers:
+  - **unit:** the default, runs in CI.
+  - **`@pytest.mark.docker`:** needs Docker, runs locally.
+  - **`@pytest.mark.live`:** spends OpenRouter credit, runs locally only, never in CI.
+- Never make a test pass by weakening it: no new `skip` or `xfail`, no removed assertions, no loosened tolerances, no mocking of the code under test, no expected values hard-coded into production code. If a test is wrong, say so in the PR and get agreement first.
+- A bug fix starts with a failing test that reproduces it.
+- Live and Docker evidence goes in the PR description: the command, abridged output and, for live runs, the OpenRouter cost.
+
+### Reviews and comments
+
+- Every comment an agent posts on GitHub starts with its role tag: `🤖 orchestrator:`, `🤖 implementer:`, `🤖 review-agent:`, `🤖 finalizer:` or `🤖 fix-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
+- Reply to every review thread with the fixing commit's SHA, or with the reason for not changing anything.
+- Agents resolve threads that agents opened, once they are fixed. Threads Vlad opened stay open until Vlad resolves them.
+- Review agents check, for every PR:
+  - each acceptance criterion is implemented and has a real test;
+  - the spec is unchanged: `git diff origin/main...HEAD -- docs/specs/` is empty, or every change is a `spec-change:` commit;
+  - no test was weakened (see above);
+  - the live and Docker evidence is genuine;
+  - the code is correct and readable.
+
+### Definition of done
+
+- Every acceptance criterion is implemented and mapped to a passing test in the PR description.
+- CI is green. The Docker and live tiers the spec requires have run locally, with evidence in the PR.
+- Docs, including this file, match the change.
+- No review thread is left unanswered.
+- The tracking issue shows the new status.
+
+### Handoffs
+
+End every working session on a PR with a comment covering what is done, what is next, blockers and open questions. The next agent starts from that comment.
