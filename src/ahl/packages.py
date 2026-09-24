@@ -12,6 +12,7 @@ runs in, so it lives outside `ahl.harnesses` and is applied once in
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 import tomllib
@@ -31,6 +32,7 @@ class Package:
     name: str
     install: str
     path: Path
+    extras: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,11 @@ def _parse_package(item: Any, root: Path) -> Package:
     if not path.is_dir():
         raise ConfigError(f"package '{name}': path does not exist or is not a directory: {path}")
 
-    return Package(name=name, install=install, path=path)
+    extras = item.get("extras", [])
+    if not isinstance(extras, list) or not all(isinstance(e, str) and e for e in extras):
+        raise ConfigError(f"package '{name}': 'extras' must be a list of extra names")
+
+    return Package(name=name, install=install, path=path, extras=tuple(extras))
 
 
 def wire_packages(
@@ -97,7 +103,7 @@ def wire_packages(
         else:  # copy
             copied = _copy_package(pkg, run_dir / "packages")
             copies.append(PackageCopy(host_path=copied, container_path=container_path))
-        setup_commands.append(_package_setup_command(pkg.path, container_path))
+        setup_commands.append(_package_setup_command(pkg, container_path))
     return volumes, copies, setup_commands
 
 
@@ -113,10 +119,11 @@ def _has_cli_entrypoints(path: Path) -> bool:
     return bool(entry_points.get("console_scripts") or entry_points.get("gui_scripts"))
 
 
-def _package_setup_command(pkg_path: Path, container_path: str) -> str:
-    if _has_cli_entrypoints(pkg_path):
-        return f"uv tool install --quiet --editable {container_path}"
-    return f"uv pip install --system --break-system-packages --quiet --editable {container_path}"
+def _package_setup_command(pkg: Package, container_path: str) -> str:
+    requirement = f"{container_path}[{','.join(pkg.extras)}]" if pkg.extras else container_path
+    if _has_cli_entrypoints(pkg.path):
+        return f"uv tool install --quiet --editable {shlex.quote(requirement)}"
+    return f"uv pip install --system --break-system-packages --quiet --editable {shlex.quote(requirement)}"
 
 
 def _copy_package(pkg: Package, dest_dir: Path) -> Path:

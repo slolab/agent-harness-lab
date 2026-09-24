@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ahl.config import RunConfig
 
+IMAGES_DIR = Path(__file__).parent / "images"
 IMAGE_REPOSITORY = "agent-harness-lab"
 INIT_SCRIPT = "/usr/local/bin/init-firewall.sh"
 CONTAINER_WORKSPACE = "/workspace"
@@ -27,8 +28,8 @@ def image_name(harness: str) -> str:
     return f"{IMAGE_REPOSITORY}:{harness}"
 
 
-def dockerfile_path(root: Path, harness: str) -> Path:
-    return root / "docker" / f"{harness}.Dockerfile"
+def dockerfile_path(harness: str) -> Path:
+    return IMAGES_DIR / f"{harness}.Dockerfile"
 
 
 def docker_run_args(
@@ -85,11 +86,13 @@ def docker_run_args(
     )
     if name:
         args.extend(["--name", name])
+    if config.network:
+        args.extend(["--network", config.network])
     for host, container in extra_volumes or []:
         args.extend(["-v", f"{host}:{container}"])
     for host, container in readonly_volumes or []:
         args.extend(["-v", f"{host}:{container}:ro"])
-    for key, value in {**GIT_IDENTITY_ENV, **env}.items():
+    for key, value in {**GIT_IDENTITY_ENV, **config.env, **env}.items():
         args.extend(["-e", f"{key}={value}"])
     args.append(image_name(config.harness.name))
     if hold or detached:

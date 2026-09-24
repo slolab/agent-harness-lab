@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1
-ARG UV_VERSION=latest
+ARG UV_VERSION=0.12.18
 
 FROM --platform=linux/amd64 ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 # Claude Science currently ships only for x64 glibc Linux. Ubuntu 24.04 also
 # supplies bubblewrap >= 0.8.0, which the app requires for code execution.
 FROM --platform=linux/amd64 ubuntu:24.04 AS runtime
+LABEL ahl.harness=claude-science
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

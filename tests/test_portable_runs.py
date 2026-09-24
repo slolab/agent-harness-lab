@@ -150,7 +150,7 @@ def test_a1_ac2_env_file_precedence_and_missing_key_errors(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
 
     def key_in_container(*flags: str) -> str | None:
-        result = ahl_cli("up", "-c", "conf/config.yaml", "--no-build", *flags)
+        result = ahl_cli("up", "-c", "conf/config.yaml", "--no-build", "--name", f"r{len(docker.calls)}", *flags)
         assert result.exit_code == 0, result.output
         return container_env(launches(docker)[-1], "OPENROUTER_API_KEY")
 

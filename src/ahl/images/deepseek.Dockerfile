@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG NODE_VERSION=22.20.0
-ARG UV_VERSION=latest
+ARG UV_VERSION=0.12.18
 
 FROM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /opt/deepseek
@@ -10,6 +10,7 @@ RUN npm ci --omit=dev
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+LABEL ahl.harness=deepseek ahl.harness.version=0.1.5-rc.1
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git python3 \
