@@ -124,7 +124,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 - Every milestone has a spec in `docs/specs/<id>-<slug>.md`. Vlad approves it by merging it to `main`, and from then on it is frozen.
 - Implement the spec as written. **Never weaken, drop or reinterpret an acceptance criterion to make progress.**
-- The implementer never edits a spec. If a criterion is wrong, impossible or far harder than expected, post a PR comment starting `🤖 implementer: BLOCKED on AC-n` with the evidence and the options you see, and stop work on that criterion.
+- The implementer never edits a spec. If a criterion is wrong, impossible or far harder than expected, post a PR comment starting with your role tag and `BLOCKED on AC-n`, for example `🤖 claude-implementer: BLOCKED on AC-3`, with the evidence and the options you see, and stop work on that criterion.
 - The orchestrator takes the question to Vlad. Only after Vlad approves a change in a PR comment does the orchestrator commit it, in its own commit prefixed `spec-change:`, with the reason and the URL of Vlad's approving comment in the commit message.
 - Findings outside the spec become new GitHub issues, not extra scope.
 
@@ -143,7 +143,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 ### Reviews and comments
 
-- Every comment an agent posts on GitHub starts with its role tag: `🤖 orchestrator:`, `🤖 implementer:`, `🤖 review-agent:`, `🤖 finalizer:` or `🤖 fix-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
+- Every comment an agent posts on GitHub starts with its role tag. The Claude orchestrator tags itself `🤖 claude-agent:`, and the subagents it dispatches use the same `claude-` prefix: `🤖 claude-implementer:`, `🤖 claude-review-agent:`, `🤖 claude-finalizer:` or `🤖 claude-fix-agent:`. Agents Vlad dispatches himself tag their role without the prefix, for example `🤖 review-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
 - Reply to every review thread with the fixing commit's SHA, or with the reason for not changing anything.
 - The agent that fixes an agent-opened thread resolves it. Threads answered without a change stay open for Vlad, and threads Vlad opened stay open until Vlad resolves them.
 - Review agents check, for every PR:
