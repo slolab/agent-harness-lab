@@ -105,8 +105,11 @@ Messages of a child session (one with a `parent_id`) take that session id as
 `agent`.
 
 - Each assistant row is one API response: one `message` from its `text` and
-  `reasoning` parts, one `tool_call` per `tool` part (output from
-  `state.output`, or `state.error` when the call failed) and one `usage` event.
+  `reasoning` parts, one `tool_call` per `tool` part and one `usage` event.
+  A tool call's output is `state.output`, or `state.error` when the call
+  failed. When OpenCode shortened a long output, `state.output` is a preview
+  and the output is the file it saved under `tool-output/` in its data
+  directory, named by `state.metadata.outputPath`.
   Rows without token counts, such as aborted responses, produce no `usage`.
   A row's `error` becomes an `error` event. Synthetic user text parts are
   `system` messages.

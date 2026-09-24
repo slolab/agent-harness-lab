@@ -80,7 +80,7 @@ class OpenCodeDriver:
         )
 
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
-        return _trace_events(_data_dir(run_dir) / "opencode.db")
+        return _trace_events(_data_dir(run_dir))
 
 
 class OpenCodeAdapter:
@@ -318,7 +318,8 @@ def _summarize_session(rows: list[tuple[str, str, str]]) -> dict[str, Any]:
     }
 
 
-def _trace_events(db_path: Path) -> list[dict[str, Any]]:
+def _trace_events(data_dir: Path) -> list[dict[str, Any]]:
+    db_path = data_dir / "opencode.db"
     if not db_path.is_file():
         return []
     with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
@@ -343,7 +344,7 @@ def _trace_events(db_path: Path) -> list[dict[str, Any]]:
         text, reasoning = _joined(message_parts, "text"), _joined(message_parts, "reasoning")
         if text or reasoning:
             events.append(event("message", *header, role="assistant", text=text, reasoning=reasoning or None))
-        events += [_tool_call(header, part) for part in message_parts if part.get("type") == "tool"]
+        events += [_tool_call(header, part, data_dir) for part in message_parts if part.get("type") == "tool"]
         if usage := _usage(info):
             events.append(event("usage", *header, **usage))
         if info.get("error"):
@@ -360,10 +361,12 @@ def _joined(parts: list[dict[str, Any]], kind: str, synthetic: bool = False) -> 
     )
 
 
-def _tool_call(header: tuple[str, str, str | None], part: dict[str, Any]) -> dict[str, Any]:
+def _tool_call(header: tuple[str, str, str | None], part: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     state = part.get("state") or {}
     status = state.get("status")
-    output = {"completed": state.get("output"), "error": state.get("error")}.get(status)
+    output = _saved_output(data_dir, (state.get("metadata") or {}).get("outputPath"))
+    if output is None:
+        output = {"completed": state.get("output"), "error": state.get("error")}.get(status)
     tool_input = state.get("input")
     return event(
         "tool_call",
@@ -374,6 +377,17 @@ def _tool_call(header: tuple[str, str, str | None], part: dict[str, Any]) -> dic
         output=output if isinstance(output, str) else None,
         is_error={"completed": False, "error": True}.get(status),
     )
+
+
+def _saved_output(data_dir: Path, container_path: Any) -> str | None:
+    # OpenCode keeps a preview in state.output and saves a long output under its data directory. Only
+    # that run-owned directory is read, since the agent can write the path into opencode.db.
+    if not isinstance(container_path, str) or not container_path.startswith(f"{CONTAINER_DATA_DIR}/"):
+        return None
+    path = (data_dir / container_path.removeprefix(f"{CONTAINER_DATA_DIR}/")).resolve()
+    if not path.is_relative_to(data_dir.resolve()) or not path.is_file():
+        return None
+    return path.read_text(errors="replace")
 
 
 def _usage(info: dict[str, Any]) -> dict[str, Any] | None:
