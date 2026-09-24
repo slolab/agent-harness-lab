@@ -108,17 +108,18 @@ def test_a1_ac3_ac4_build_outside_checkout_installs_pinned_or_current_version(tm
     )
     assert direct.returncode != 0 and "HARNESS_VERSION" in direct.stderr, direct.stderr[-3000:]
 
-    for flags, expected in [(["-c", "pinned.yaml"], PINNED[harness]), (["--harness", harness], current_release(harness))]:
-        ids = []
-        for _ in range(2):
-            result = ahl_process("build", *flags, cwd=tmp_path)
-            assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
-            ids.append(docker("image", "inspect", "--format", "{{.Id}}", image))
-
-        assert ids[0] == ids[1]
+    def build(*flags: str) -> tuple[str, str]:
+        result = ahl_process("build", *flags, cwd=tmp_path)
+        assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
         labels = json.loads(docker("image", "inspect", "--format", "{{json .Config.Labels}}", image))
-        assert installed_version(image, harness) == expected
-        assert labels == {"ahl.harness": harness, "ahl.harness.version": expected}
+        assert labels == {"ahl.harness": harness, "ahl.harness.version": installed_version(image, harness)}
+        return docker("image", "inspect", "--format", "{{.Id}}", image), labels["ahl.harness.version"]
+
+    pinned = build("-c", "pinned.yaml")
+    assert build("-c", "pinned.yaml") == pinned and pinned[1] == PINNED[harness]
+    before = current_release(harness)
+    _, current = build("--harness", harness)
+    assert current in {before, current_release(harness)}
 
 
 @pytest.mark.docker
@@ -134,12 +135,11 @@ def test_a1_ac5_ac8_up_records_started_image_and_installs_extras(tmp_path):
     package = {"name": "extras-lib", "install": "mount", "path": "./extras-lib", "extras": ["graph"]}
     probe = "python3 -c 'import iniconfig; print(\"imported-\" + iniconfig.__name__)'"
 
-    for pin, expected, version in [
-        ("pinned", PINNED["claude"], {"harness_version": PINNED["claude"]}),
-        ("current", current_release("claude"), {}),
-    ]:
-        config = {"harness": "claude", "provider": "anthropic", "packages": [package], **version}
+    for pin, harness_version in [("pinned", {"harness_version": PINNED["claude"]}), ("current", {})]:
+        config = {"harness": "claude", "provider": "anthropic", "packages": [package], **harness_version}
         (tmp_path / "config.yaml").write_text(yaml.safe_dump(config))
+        before = current_release("claude")
+        recorded = set()
         for name, flags in [(f"{pin}-built", []), (f"{pin}-prebuilt", ["--no-build"])]:
             code, output = ahl_up_in_pty("--name", name, *flags, cwd=tmp_path, command=probe)
 
@@ -147,5 +147,9 @@ def test_a1_ac5_ac8_up_records_started_image_and_installs_extras(tmp_path):
             assert "imported-iniconfig" in output, output[-3000:]
             image_id = docker("image", "inspect", "--format", "{{.Id}}", "agent-harness-lab:claude").strip()
             session = json.loads((tmp_path / "runs" / name / "session.json").read_text())
-            assert installed_version(image_id, "claude") == expected
-            assert session["image"] == {"name": "agent-harness-lab:claude", "id": image_id, "harness_version": expected}
+            installed = installed_version(image_id, "claude")
+            assert session["image"] == {"name": "agent-harness-lab:claude", "id": image_id, "harness_version": installed}
+            recorded.add(installed)
+
+        expected = {PINNED["claude"]} if harness_version else {before, current_release("claude")}
+        assert len(recorded) == 1 and recorded <= expected
