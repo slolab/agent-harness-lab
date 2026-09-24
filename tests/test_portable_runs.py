@@ -6,7 +6,6 @@ import re
 import subprocess
 from importlib import metadata, resources
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,66 +14,15 @@ from typer.testing import CliRunner
 
 import ahl
 from ahl import cli
-from ahl.config import PROVIDER_KEY_ENV, ConfigError, load_config
+from ahl.config import ConfigError, load_config
 
 IMAGES = resources.files("ahl") / "images"
 PACKAGE_DIR = Path(ahl.__file__).resolve().parent
 EXAMPLE = Path(__file__).resolve().parents[1] / "config.example.yaml"
 
 
-@pytest.fixture(autouse=True)
-def provider_keys_restored(monkeypatch):
-    for key in PROVIDER_KEY_ENV.values():
-        monkeypatch.setenv(key, "")
-        monkeypatch.delenv(key)
-
-
-@pytest.fixture
-def docker(monkeypatch):
-    real_run = subprocess.run
-    state = SimpleNamespace(
-        calls=[],
-        build_envs=[],
-        networks=set(),
-        image_id="sha256:" + "ab" * 32,
-        labels={},
-        ahl_tracked=True,
-    )
-
-    def run(args, **kwargs):
-        if args[0] == "git":
-            if state.ahl_tracked or "ls-files" not in args:
-                return real_run(args, **kwargs)
-            if kwargs.get("check"):
-                raise subprocess.CalledProcessError(1, args)
-            return subprocess.CompletedProcess(args, 1, "", "error: pathspec did not match any file(s) known to git")
-        state.calls.append(args)
-        if args[:2] == ["docker", "build"]:
-            state.build_envs.append(kwargs.get("env"))
-        if args[:3] == ["docker", "image", "inspect"]:
-            if state.image_id is None:
-                return subprocess.CompletedProcess(args, 1, "", f"Error response from daemon: No such image: {args[3]}")
-            info = [{"Id": state.image_id, "Config": {"Labels": state.labels}}]
-            return subprocess.CompletedProcess(args, 0, json.dumps(info), "")
-        if args[:3] == ["docker", "network", "inspect"]:
-            found = args[3] in state.networks
-            return subprocess.CompletedProcess(args, 0 if found else 1, "[]", "")
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(cli.subprocess, "run", run)
-    return state
-
-
 def ahl_cli(*args: Any):
     return CliRunner().invoke(cli.app, [str(a) for a in args])
-
-
-def launches(docker) -> list[list[str]]:
-    return [c for c in docker.calls if c[:2] == ["docker", "run"]]
-
-
-def builds(docker) -> list[list[str]]:
-    return [c for c in docker.calls if c[:2] == ["docker", "build"]]
 
 
 def write_config(path: Path, **raw: Any) -> Path:
@@ -126,7 +74,7 @@ def test_a1_ac1_paths_resolve_against_config_dir_and_working_dir(tmp_path, monke
 
     assert result.exit_code == 0, result.output
     run = cwd / "out/runs/r1"
-    args = launches(docker)[-1]
+    args = docker.launches()[-1]
     assert {
         f"{run / 'workspace'}:/workspace",
         f"{skill}:/root/.config/opencode/skills/my-skill:ro",
@@ -156,7 +104,7 @@ def test_a1_ac2_env_file_precedence_and_missing_key_errors(tmp_path, monkeypatch
     def key_in_container(*flags: str) -> str | None:
         result = ahl_cli("up", "-c", "conf/config.yaml", "--no-build", "--name", f"r{len(docker.calls)}", *flags)
         assert result.exit_code == 0, result.output
-        return container_env(launches(docker)[-1], "OPENROUTER_API_KEY")
+        return container_env(docker.launches()[-1], "OPENROUTER_API_KEY")
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "shell-key")
     assert key_in_container("--env-file", "explicit.env") == "file-key"
@@ -197,7 +145,7 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
     result = ahl_cli("build", "-c", "../conf/config.yaml")
 
     assert result.exit_code == 0, result.output
-    assert builds(docker) == [
+    assert docker.builds() == [
         ["docker", "build", "-t", "agent-harness-lab:deepseek", "-f", str(IMAGES / "deepseek.Dockerfile"), str(IMAGES)]
     ]
     assert docker.build_envs == [{**os.environ, "BUILDX_NO_DEFAULT_ATTESTATIONS": "1"}]
@@ -206,12 +154,12 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
     assert ahl_cli("build", "--harness", "claude").exit_code == 0
     assert ahl_cli("build", "-c", "../conf/config.yaml").exit_code == 0
     assert "OPENROUTER_API_KEY" not in os.environ
-    assert [b[3] for b in builds(docker)] == [
+    assert [b[3] for b in docker.builds()] == [
         "agent-harness-lab:deepseek", "agent-harness-lab:claude", "agent-harness-lab:deepseek"
     ]
     assert ahl_cli("build").exit_code == 2
     assert ahl_cli("build", "--harness", "claude", "-c", "../conf/config.yaml").exit_code == 2
-    assert launches(docker) == []
+    assert docker.launches() == []
 
 
 def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, docker):
@@ -240,7 +188,7 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
         "id": docker.image_id,
         "harness_version": "1.18.32",
     }
-    assert docker.image_id in launches(docker)[-1] and session["image"]["name"] not in launches(docker)[-1]
+    assert docker.image_id in docker.launches()[-1] and session["image"]["name"] not in docker.launches()[-1]
     assert session["harness"] == "opencode" and session["run_id"] == "built"
 
     write_config(config, **OPENROUTER, packages=[{"name": "lib", "install": "copy", "path": "./lib"}])
@@ -256,7 +204,7 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
     unlabelled = ahl_cli("up", "-c", config, "--no-build", "--name", "unlabelled")
 
     assert unlabelled.exit_code == 0, unlabelled.output
-    assert launches(docker)[-1][:4] == ["docker", "run", "--rm", "-d"] and docker.image_id in launches(docker)[-1]
+    assert docker.launches()[-1][:4] == ["docker", "run", "--rm", "-d"] and docker.image_id in docker.launches()[-1]
     session = json.loads((tmp_path / "runs/unlabelled/session.json").read_text())
     assert session["image"] == {"name": "agent-harness-lab:opencode", "id": docker.image_id, "harness_version": None}
     assert session["ahl"]["git_sha"] is None and session["ahl"]["git_dirty"] is None
@@ -274,7 +222,7 @@ def test_a1_ac6_mounts_bind_read_only_by_default_and_reject_invalid_entries(make
     result = ahl_cli("up", "-c", tmp_path / "config.yaml", "--no-build", "--name", "mounts")
 
     assert result.exit_code == 0, result.output
-    args = launches(docker)[-1]
+    args = docker.launches()[-1]
     assert f"{tmp_path / 'data'}:/workspace/data:ro" in args
     assert f"{tmp_path / 'scratch'}:/scratch" in args
     for mounts, error in [
@@ -303,7 +251,7 @@ def test_a1_ac7_network_and_env_reach_container_and_reject_invalid(make_config, 
     result = ahl_cli("up", "-c", tmp_path / "config.yaml", "--no-build", "--name", "net")
 
     assert result.exit_code == 0, result.output
-    args = launches(docker)[-1]
+    args = docker.launches()[-1]
     assert args[args.index("--network") + 1] == "lab_default"
     assert container_env(args, "NEO4J_URI") == "bolt://neo4j:7687"
 
@@ -312,7 +260,7 @@ def test_a1_ac7_network_and_env_reach_container_and_reject_invalid(make_config, 
     missing = ahl_cli("up", "-c", tmp_path / "config.yaml", "--no-build", "--name", "nonet")
 
     assert missing.exit_code == 2 and "missing_net" in missing.output
-    assert len(launches(docker)) == 1 and not (tmp_path / "runs/nonet").exists()
+    assert len(docker.launches()) == 1 and not (tmp_path / "runs/nonet").exists()
     for harness, provider, env in [
         ("opencode", "openrouter", {"NEO4J_PORT": 7687}),
         ("claude", "anthropic", {"OPENROUTER_API_KEY": "sk-or-other"}),
@@ -357,8 +305,8 @@ def test_a1_ac9_defaults_read_local_env_write_local_runs_and_build(tmp_path, mon
     assert result.exit_code == 0, result.output
     [run] = (tmp_path / "runs").iterdir()
     assert json.loads((run / "session.json").read_text())["run_id"] == run.name
-    assert container_env(launches(docker)[-1], "OPENROUTER_API_KEY") == "dotenv-key"
-    assert builds(docker) == [
+    assert container_env(docker.launches()[-1], "OPENROUTER_API_KEY") == "dotenv-key"
+    assert docker.builds() == [
         ["docker", "build", "-t", "agent-harness-lab:opencode", "-f",
          str(IMAGES / "opencode.Dockerfile"), str(IMAGES)]
     ]

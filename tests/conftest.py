@@ -1,19 +1,72 @@
 from __future__ import annotations
 
+import json
+import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
-from ahl.config import RunConfig, load_config
+from ahl.config import PROVIDER_KEY_ENV, RunConfig, load_config
+
+_real_run = subprocess.run
+
+
+@pytest.fixture(autouse=True)
+def provider_keys_restored(monkeypatch: pytest.MonkeyPatch):
+    for key in PROVIDER_KEY_ENV.values():
+        # setenv registers an unset key, so teardown also removes values load_dotenv writes into os.environ.
+        monkeypatch.setenv(key, "")
+        monkeypatch.delenv(key)
+
+
+@dataclass
+class DockerStub:
+    calls: list[list[str]] = field(default_factory=list)
+    build_envs: list[dict[str, str] | None] = field(default_factory=list)
+    networks: set[str] = field(default_factory=set)
+    image_id: str | None = "sha256:" + "ab" * 32
+    labels: dict[str, str] = field(default_factory=dict)
+    ahl_tracked: bool = True
+
+    def __call__(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if args[0] == "git":
+            if self.ahl_tracked or "ls-files" not in args:
+                return _real_run(args, **kwargs)
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(1, args)
+            return subprocess.CompletedProcess(args, 1, "", "error: pathspec did not match any file(s) known to git")
+        self.calls.append(args)
+        if args[:2] == ["docker", "build"]:
+            self.build_envs.append(kwargs.get("env"))
+        if args[:3] == ["docker", "image", "inspect"]:
+            if self.image_id is None:
+                return subprocess.CompletedProcess(args, 1, "", f"Error response from daemon: No such image: {args[3]}")
+            info = [{"Id": self.image_id, "Config": {"Labels": self.labels}}]
+            return subprocess.CompletedProcess(args, 0, json.dumps(info), "")
+        if args[:3] == ["docker", "network", "inspect"]:
+            return subprocess.CompletedProcess(args, 0 if args[3] in self.networks else 1, "[]", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def launches(self) -> list[list[str]]:
+        return [c for c in self.calls if c[:2] == ["docker", "run"]]
+
+    def builds(self) -> list[list[str]]:
+        return [c for c in self.calls if c[:2] == ["docker", "build"]]
+
+
+@pytest.fixture
+def docker(monkeypatch: pytest.MonkeyPatch) -> DockerStub:
+    stub = DockerStub()
+    monkeypatch.setattr(subprocess, "run", stub)
+    return stub
 
 
 @pytest.fixture
 def make_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Load a temporary config with synthetic credentials, isolated from the host."""
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
 
     def _make(
         *,
