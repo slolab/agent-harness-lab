@@ -89,6 +89,7 @@ class _HeadlessRun:
         self.interrupts = interrupts
         self.key = provider_key(run.config) if run.config.provider.name == "openrouter" else None
         self.turns = [self._record(index, path) for index, path in enumerate(turn_files, start=1)]
+        self.active = self.turns[0]
         self.warnings: list[dict[str, Any]] = []
 
     def execute(self) -> int:
@@ -99,6 +100,7 @@ class _HeadlessRun:
                 if self.failure is None:
                     session_id = None
                     for turn in self.turns:
+                        self.active = turn
                         session_id = self._turn(turn, session_id) or session_id
                         if turn["status"] != "completed" or self.interrupts.count:
                             break
@@ -226,11 +228,9 @@ class _HeadlessRun:
         _docker("rm", "-f", self.run.container)
 
     def _settle_statuses(self) -> tuple[str, dict[str, str] | None]:
-        if self.interrupts.count:
-            last = next((turn for turn in self.turns if turn["status"] != "completed"), self.turns[-1])
-            if last["status"] != "timeout":
-                message = f"turn {last['index']} was interrupted"
-                last.update(status="interrupted", reason={"code": "interrupted", "message": message})
+        if self.interrupts.count and self.active["status"] != "timeout":
+            message = f"turn {self.active['index']} was interrupted"
+            self.active.update(status="interrupted", reason={"code": "interrupted", "message": message})
         pending = [turn for turn in self.turns if turn["status"] is None]
         stopped = next((turn for turn in self.turns if turn["status"] not in (None, "completed")), None)
         cause = f"turn {stopped['index']} {stopped['status']}" if stopped else "the run failed before turn 1"

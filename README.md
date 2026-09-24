@@ -101,9 +101,10 @@ such as HTTP 429 or 5xx (best effort). Skipped turns have
 Ctrl-C (SIGINT) interrupts the image build, the container start, a turn and
 the key-usage wait after a turn, and no further turn starts. Stopping the
 harness, recording the turn, handing files to the caller, removing the
-container and writing the run directory always finish. After any Ctrl-C, the
-first turn that did not complete, or the last turn if all did, ends as
-`interrupted` unless it timed out.
+container and writing the run directory always finish. The turn that was
+running, or whose usage wait was running, ends as `interrupted` unless it timed
+out, and later turns are `skipped`. A Ctrl-C before turn 1 marks turn 1, and
+one during cleanup marks the last turn that ran.
 
 Every terminal state except exit 2 leaves:
 
