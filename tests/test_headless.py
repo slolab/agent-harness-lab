@@ -104,21 +104,20 @@ def test_a2_ac1_flags_default_and_failures_map_to_exit_codes(tmp_path, monkeypat
         "run", "-c", "../conf/config.yaml", "--turn", "prompts/t1.md", "--turn", "prompts/t1.md",
         "--no-build", "--env-file", "../keys.env", "--runs-dir", "out", "--timeout", "90",
     ]
-    unmigrated_db = Turn(raises=subprocess.TimeoutExpired("opencode", 90), effect=(
-        work / "out/timeout/opencode/data/opencode.db"
-    ).touch)
-    for name, turn, running, code, status in [
-        ("exec", Turn(exit_code=126, stderr="OCI runtime exec failed: permission denied"), True, 3, "error"),
-        ("daemon", Turn(exit_code=1, stderr="Error response from daemon: container is paused"), True, 3, "error"),
-        ("vanished", Turn(exit_code=137), False, 3, "error"),
-        ("timeout", unmigrated_db, True, 124, "timeout"),
+    infra, unmigrated_db = ("error", "infra"), work / "out/timeout/opencode/data/opencode.db"
+    for name, turn, running, code, (status, reason) in [
+        ("exec", Turn(exit_code=126, stderr="OCI runtime exec failed: permission denied"), True, 3, infra),
+        ("daemon", Turn(exit_code=1, stderr="Error response from daemon: container is paused"), True, 3, infra),
+        ("vanished", Turn(exit_code=137), False, 3, infra),
+        ("timeout", Turn(raises=subprocess.TimeoutExpired("opencode", 90), effect=unmigrated_db.touch), True, 124,
+         ("timeout", "timeout")),
     ]:
         docker.turns, docker.running = [turn], running
         failed = ahl(*common, "--name", name)
 
         assert failed.exit_code == code, failed.output
         outcome = load(work / "out" / name / "result.json")
-        assert (outcome["status"], outcome["reason"]["code"]) == (status, {"error": "infra"}.get(status, status))
+        assert (outcome["status"], outcome["reason"]["code"]) == (status, reason)
         assert [t["status"] for t in outcome["turns"]] == [status, "skipped"]
     assert docker.timeouts[1:] == [90, 90, 90, 90] and len(docker.builds()) == 1
     assert [w["code"] for w in outcome["warnings"]] == ["trace_unreadable"]

@@ -172,7 +172,7 @@ class _HeadlessRun:
             outcome = self._classify(exit_code, report, (directory / "stderr.log").read_text(errors="replace"))
         if self.key:
             measured = keyusage.after_turn(self.key, before, self.interrupts.interruptible)
-            if measured.interrupted and outcome.status not in ("timeout", "interrupted"):
+            if measured.interrupted and outcome.status != "timeout":
                 outcome = interrupted
             turn["key_usage"] = measured.key_usage
             if measured.warning:
@@ -232,7 +232,8 @@ class _HeadlessRun:
         pending = [turn for turn in self.turns if turn["status"] is None]
         if interrupted and pending:
             first = pending.pop(0)
-            first.update(status="interrupted", reason={"code": "interrupted", "message": f"turn {first['index']} was interrupted"})
+            message = f"turn {first['index']} was interrupted"
+            first.update(status="interrupted", reason={"code": "interrupted", "message": message})
         stopped = next((turn for turn in self.turns if turn["status"] not in (None, "completed")), None)
         cause = f"turn {stopped['index']} {stopped['status']}" if stopped else "the run failed before turn 1"
         for turn in pending:

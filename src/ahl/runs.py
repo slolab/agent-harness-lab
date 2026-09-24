@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import secrets
 import subprocess
@@ -109,11 +110,13 @@ def _create_mountpoints(run: PreparedRun) -> None:
             continue
         host, path = max(parents, key=lambda mount: len(mount[1]))
         mountpoint = host / posixpath.relpath(target, path)
+        if os.path.lexists(mountpoint):
+            continue
+        mountpoint.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
-            mountpoint.mkdir(parents=True, exist_ok=True)
+            mountpoint.mkdir()
         else:
-            mountpoint.parent.mkdir(parents=True, exist_ok=True)
-            mountpoint.touch(exist_ok=True)
+            mountpoint.touch()
 
 
 def write_native_trace(run: PreparedRun) -> Path | None:
