@@ -63,6 +63,82 @@ ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
 - `--runs-dir DIR` puts the run at `DIR/<run id>`; `--name` and `--resume`
   look inside `DIR`. The default is `runs/` next to the config.
 
+## Headless runs
+
+```bash
+ahl run -c config.yaml --turn build.md --turn review.md \
+  [--env-file PATH] [--runs-dir DIR] [--name NAME] [--timeout SECONDS] [--build/--no-build]
+```
+
+`ahl run` sends each `--turn` file, byte for byte on stdin, as one turn of a
+single native session and exits. Claude Code and OpenCode have headless
+drivers; other harnesses are a usage error. `--timeout` applies to each turn
+(default 3600). `--env-file`, `--runs-dir`, `--name`, `--build` and relative
+paths behave as in `ahl up`; a relative `--turn` resolves against the working
+directory, and a `--name` whose run directory exists is a usage error. After a
+turn that does not complete, the remaining turns are skipped.
+
+No session can wait for input. Tools run without permission prompts and the
+ask-user tool is denied. Claude Code runs as root with `IS_SANDBOX=1`,
+`--dangerously-skip-permissions` and `--disallowedTools AskUserQuestion`,
+resuming turn 1's session with `--resume`; with OpenRouter, every model alias
+(`ANTHROPIC_DEFAULT_*_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+`CLAUDE_CODE_SUBAGENT_MODEL`) resolves to the configured model. OpenCode runs
+`opencode run --format json`, resuming with `--session`, and receives an
+explicit value for every permission key of its pinned version through
+`OPENCODE_PERMISSION`: `allow`, except `question` and any denied web tool.
+
+| Exit | Run `status` | Reason codes | When |
+|---|---|---|---|
+| 0 | `completed` | – | Every turn completed |
+| 1 | `failed` | `harness_exit`, `harness_reported_error`, `no_assistant_output`, `provider_error` | The harness failed in a turn |
+| 2 | – | – | Config or usage error; no `result.json` |
+| 3 | `error` | `infra` | Image build or container start failed, `docker exec` exited 125–127, the Docker daemon reported an error, or the container is gone |
+| 124 | `timeout` | `timeout` | A turn exceeded `--timeout` |
+| 130 | `interrupted` | `interrupted` | Ctrl-C |
+
+When several apply, precedence is timeout, interrupted, error, failed.
+`harness_exit`: the harness exited non-zero. `harness_reported_error`: it
+exited 0 but reported an error. `no_assistant_output`: the turn produced no
+assistant message. `provider_error`: the output shows a provider or API error
+such as HTTP 429 or 5xx (best effort). Skipped turns have
+`skipped_after_failure`.
+
+Every terminal state except exit 2 leaves:
+
+```
+<run dir>/
+  session.json   result.json   trace.jsonl   trace.json
+  turns/<n>/prompt.md                            copy of every turn file
+  turns/<n>/stdout.jsonl, turns/<n>/stderr.log   raw output of every started turn
+  <harness home>/  workspace/                    native harness state and the workspace
+```
+
+- `result.json` holds the run's `status` and `reason` (those of the first turn
+  that did not complete), the native `session_id`, and per turn its prompt
+  file and SHA-256, timings, exit code, status, reason, session id and
+  `key_usage`. `totals` sums wall clock, key cost and the token fields of the
+  trace's `usage` events; `warnings` lists `{code, turn, message}`.
+- `key_usage` (OpenRouter only, otherwise null) reads `GET /api/v1/key` before
+  and after each started turn. After a turn AHL polls every 10 s for up to
+  120 s until the usage has risen and two readings agree (`settled: true`).
+  A usage that never rises gives `delta_usd: null` and the warning
+  `usage_not_updated`; a failed read gives `usage_read_failed`. A second
+  Ctrl-C ends the wait. `totals.cost_usd_key_delta` is null if any started
+  turn's delta is null.
+- `trace.jsonl` is one normalized event per line for every harness; see
+  [the trace schema](docs/trace-schema.md).
+- `session.json` adds `"mode": "headless"`. Both `ahl run` and `ahl up`
+  record `container`, the Docker container name, and
+  `model_parameters.unsupported`, the configured `model.parameters` keys the
+  harness cannot apply (each also prints a warning).
+
+Container names are `ahl-<run id>-<8 hex>`, unique per invocation, so a
+leftover container never blocks a new run. AHL removes the container in every
+terminal state, after stopping the harness and handing the files it wrote to
+the calling user. If AHL is killed with SIGKILL, the container keeps running;
+remove it with `docker rm -f <container>` from `session.json`.
+
 ## Configuration
 
 Two files, clean split:
@@ -138,7 +214,8 @@ permissions:
 |---|---|
 | Claude Code (account login or OpenRouter) | Enforced through managed settings |
 | DeepSeek | Enforced by a global native tool guard |
-| OpenCode, Gemini, Antigravity, Claude Science | Warning; requested denials are not applied |
+| OpenCode | Enforced through `permission` in the seeded `opencode.json` |
+| Gemini, Antigravity, Claude Science | Warning; requested denials are not applied |
 
 Omit the block or use `deny: []` for no AHL denials. Resume installs the current
 rules, including removal of old AHL denials. `session.json` records requested,
@@ -174,7 +251,8 @@ not pinned. Every image carries the label `ahl.harness=<name>`.
 ## Observability
 
 Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
-workspace mode, timestamp, permissions). It also records provenance: `ahl`
+workspace mode, timestamp, permissions, container name, unsupported model
+parameters). It also records provenance: `ahl`
 (version, plus `git_sha` and `git_dirty` when AHL runs from a git checkout,
 otherwise null) and `image` (name, ID and `ahl.harness.version` label of the
 image the container started from). **gemini**, **opencode**, **claude**, and **deepseek** persist
@@ -207,6 +285,10 @@ provider-native `model` such as `qwen/qwen3.7-flash`. Supported harnesses are
 Claude Code, OpenCode, and DeepSeek; other combinations fail during config loading.
 Model IDs are preserved exactly. OpenCode adds its outer routing prefix:
 `openrouter/auto` becomes `openrouter/openrouter/auto` inside OpenCode.
+For OpenCode, `model.parameters.provider` reaches OpenRouter's
+[provider routing](https://openrouter.ai/docs/features/provider-routing)
+verbatim, e.g. `{only: [deepinfra], quantizations: [fp8], allow_fallbacks: false}`.
+Claude Code cannot apply it and warns.
 
 Claude receives the gateway URL, bearer credential, and primary model through
 its environment; plain `claude` uses that model too. When switching an existing
