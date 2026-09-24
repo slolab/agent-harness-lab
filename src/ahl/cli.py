@@ -7,7 +7,6 @@ import os
 import subprocess
 import urllib.request
 from datetime import datetime, timezone
-from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
@@ -23,15 +22,24 @@ from ahl.config import (
     parse_harness_version,
     read_config,
 )
-from ahl.docker import CONTAINER_WORKSPACE, IMAGES_DIR, docker_run_args, dockerfile_path, image_name
+from ahl.docker import CONTAINER_WORKSPACE, IMAGES_DIR, docker_daemon_unreachable, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
-from ahl.packages import PackageCopy, wire_packages
-from ahl.permissions import PermissionSetup, validate_setup
-from ahl.skills import wire_delegated_skills
-from ahl.workspace import resolve_workspace
+from ahl.headless import run_headless
+from ahl.runs import PreparedRun, prepare_run, start_container
 
 app = typer.Typer(no_args_is_help=True)
 VERSIONED_HARNESSES = {*HARNESS_NPM_PACKAGES, "deepseek"}
+ConfigOption = Annotated[Path, typer.Option("--config", "-c", help="Path to local config.yaml")]
+EnvFileOption = Annotated[
+    Path | None,
+    typer.Option("--env-file", help="Env file with provider keys; wins over the shell. Default: .env next to the config"),
+]
+RunsDirOption = Annotated[
+    Path | None,
+    typer.Option("--runs-dir", help="Directory holding run directories. Default: runs/ next to the config"),
+]
+BuildOption = Annotated[bool, typer.Option("--build/--no-build", help="Build harness image before launching")]
+NameOption = Annotated[str | None, typer.Option("--name", "-n", help="Name this run instead of the default timestamp id")]
 
 
 @app.callback()
@@ -41,23 +49,11 @@ def main() -> None:
 
 @app.command()
 def up(
-    config: Annotated[
-        Path, typer.Option("--config", "-c", help="Path to local config.yaml")
-    ] = Path("config.yaml"),
-    env_file: Annotated[
-        Path | None,
-        typer.Option("--env-file", help="Env file with provider keys; wins over the shell. Default: .env next to the config"),
-    ] = None,
-    runs_dir: Annotated[
-        Path | None,
-        typer.Option("--runs-dir", help="Directory holding run directories. Default: runs/ next to the config"),
-    ] = None,
-    build: Annotated[
-        bool, typer.Option("--build/--no-build", help="Build harness image before launching")
-    ] = True,
-    name: Annotated[
-        str | None, typer.Option("--name", "-n", help="Name this run instead of the default timestamp id")
-    ] = None,
+    config: ConfigOption = Path("config.yaml"),
+    env_file: EnvFileOption = None,
+    runs_dir: RunsDirOption = None,
+    build: BuildOption = True,
+    name: NameOption = None,
     resume: Annotated[
         str | None,
         typer.Option("--resume", help="Continue a previous run by name, reusing its workspace and harness state"),
@@ -77,166 +73,144 @@ def up(
 
     if resume and name:
         raise typer.BadParameter("--resume and --name are mutually exclusive")
-
-    try:
-        run_config = load_config(config, env_file)
-    except ConfigError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    runs_root = runs_dir.expanduser().resolve() if runs_dir else run_config.root / "runs"
-    run_id = resume or name or _run_id(run_config.harness.name)
-    run_dir = runs_root / run_id
-    taken = f"run '{run_id}' already exists at {run_dir} (use --resume to continue it)"
+    run_config = _load(config, env_file)
+    run_dir = _run_dir(run_config, runs_dir, resume or name)
     if resume:
         if not run_dir.is_dir():
-            raise typer.BadParameter(f"no run named '{run_id}' found at {run_dir}")
+            raise typer.BadParameter(f"no run named '{run_dir.name}' found at {run_dir}")
         _check_resumable(run_dir, run_config)
-    elif run_dir.exists():
-        raise typer.BadParameter(taken)
-
-    # Docker Desktop treats non-zero `docker run` exits (e.g. shell exit after
-    # Ctrl-C → status 130) as "container errors" and prints Gordon tips.
-    os.environ.setdefault("DOCKER_CLI_HINTS", "false")
-    _ensure_docker()
-    if run_config.network:
-        _check_network(run_config.network)
-    if build:
-        _build_image(run_config.harness.name, run_config.harness_version)
-    image = _image_record(run_config.harness.name, run_config.harness_version, config)
-
+    else:
+        _check_new(run_dir, "use --resume to continue it")
+    image = _docker_setup(run_config, build, config)
     if not resume:
-        try:
-            run_dir.mkdir(parents=True, exist_ok=False)
-        except FileExistsError as exc:
-            raise typer.BadParameter(taken) from exc
+        _claim(run_dir, "use --resume to continue it")
+    run = _prepare(run_config, run_dir, image, resume=bool(resume), headless=False)
 
-    try:
-        workspace_dir = resolve_workspace(run_dir, run_config.workspace, resume=bool(resume))
-    except ConfigError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    adapter = get_adapter(run_config.harness.name)
-    container_name = f"ahl-{run_id}"
-    env = adapter.build_env(run_config)
-
-    try:
-        extra_volumes = adapter.seed(run_dir, run_config)
-        permissions = adapter.permission_handler.prepare(
-            run_dir, run_config, run_config.permissions
-        )
-        validate_setup(run_config.permissions, permissions)
-        if permissions.unsupported:
-            detail = "; ".join(
-                f"{op}: {reason}" for op, reason in sorted(permissions.unsupported.items())
-            )
-            typer.echo(f"[ahl] warning: permissions not applied: {detail}", err=True)
-        readonly_volumes = adapter.wire_capabilities(run_dir, run_config, run_config.capabilities)
-        skill_volumes, skill_commands = wire_delegated_skills(
-            run_config.harness.name,
-            run_config.capabilities,
-        )
-        package_volumes, package_copies, package_commands = wire_packages(
-            run_dir,
-            run_config.packages,
-        )
-        readonly_volumes += permissions.readonly_volumes
-        readonly_volumes += skill_volumes
-        readonly_volumes += package_volumes
-        setup_commands = skill_commands + package_commands
-    except ConfigError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    use_copy_flow = bool(package_copies)
-    args = docker_run_args(
-        run_config,
-        env,
-        workspace_dir,
-        name=container_name,
-        extra_volumes=extra_volumes,
-        readonly_volumes=readonly_volumes,
-        setup_commands=None if use_copy_flow else setup_commands,
-        detached=use_copy_flow,
-        hold=use_copy_flow,
-        extra_args=adapter.docker_args(run_config),
-        image=image["id"],
-    )
-
-    _write_session(
-        run_dir, run_config, run_id, workspace_dir, permissions, image, resumed=bool(resume)
-    )
-    typer.echo(f"AHL session: {run_id}")
+    typer.echo(f"AHL session: {run_dir.name}")
     typer.echo(f"Provider: {run_config.provider.name} | Model: {run_config.model.name or '(harness default)'}")
     if run_config.workspace.install == "copy":
         template = run_config.workspace.path
         typer.echo(
-            f"Workspace: {workspace_dir} -> {CONTAINER_WORKSPACE} "
+            f"Workspace: {run.workspace} -> {CONTAINER_WORKSPACE} "
             f"(copy{f' of {template}' if template else ' — no template, empty'}, "
             f"original untouched)"
         )
     else:
-        typer.echo(f"Workspace: {workspace_dir} -> {CONTAINER_WORKSPACE}")
-    for host, container in extra_volumes:
+        typer.echo(f"Workspace: {run.workspace} -> {CONTAINER_WORKSPACE}")
+    for host, container in run.extra_volumes:
         typer.echo(f"Mount: {host} -> {container}")
-    for host, container in readonly_volumes:
+    for host, container in run.readonly_volumes:
         typer.echo(f"Mount: {host} -> {container} (ro)")
     for mount in run_config.mounts:
         typer.echo(f"Mount: {mount.path} -> {mount.target}{' (ro)' if mount.readonly else ''}")
-    for copy in package_copies:
+    for copy in run.package_copies:
         typer.echo(f"Copy: {copy.host_path} -> {copy.container_path}")
-    for cmd in setup_commands:
+    for cmd in run.setup_commands:
         typer.echo(f"Setup: {cmd}")
-    typer.echo(f"Start the harness inside the shell with:\n  {adapter.start_command(run_config)}")
-    for hint in adapter.start_hints(run_dir, run_config):
+    typer.echo(f"Start the harness inside the shell with:\n  {run.adapter.start_command(run_config)}")
+    for hint in run.adapter.start_hints(run_dir, run_config):
         typer.echo(f"  ({hint})")
     typer.echo("Exit the shell to stop.")
 
     try:
-        if use_copy_flow:
-            _run_with_copied_packages(container_name, args, package_copies, setup_commands)
+        if run.package_copies:
+            _shell_with_copied_packages(run)
         else:
-            subprocess.run(args, check=False)
+            subprocess.run(run.docker_args, check=False)
     except KeyboardInterrupt:
-        subprocess.run(["docker", "rm", "-f", container_name], check=False)
+        pass
     finally:
-        trace = adapter.parse_trace(run_dir)
+        subprocess.run(["docker", "rm", "-f", run.container], capture_output=True, check=False)
+        trace = run.adapter.parse_trace(run_dir)
         if trace is not None:
             trace_path = run_dir / "trace.json"
             trace_path.write_text(json.dumps(trace, indent=2, sort_keys=True))
             typer.echo(f"Trace: {trace_path}")
 
 
-def _run_with_copied_packages(
-    container_name: str,
-    run_args: list[str],
-    package_copies: list[PackageCopy],
-    setup_commands: list[str],
+@app.command()
+def run(
+    turn: Annotated[
+        list[Path],
+        typer.Option("--turn", exists=True, dir_okay=False, resolve_path=True, help="Prompt file for the next turn"),
+    ],
+    config: ConfigOption = Path("config.yaml"),
+    env_file: EnvFileOption = None,
+    runs_dir: RunsDirOption = None,
+    name: NameOption = None,
+    timeout: Annotated[float, typer.Option("--timeout", min=1, help="Seconds allowed per turn")] = 3600,
+    build: BuildOption = True,
 ) -> None:
-    """Start detached, docker cp packages in, setup, then interactive bash."""
+    """Run each --turn file as one turn of a single headless harness session.
+
+    Exit codes: 0 completed, 1 failed, 2 usage error, 3 infrastructure error,
+    124 timeout, 130 interrupted. The run directory holds result.json,
+    session.json, trace.jsonl and the raw output of every turn.
+    """
+    run_config = _load(config, env_file)
+    if get_adapter(run_config.harness.name).driver is None:
+        raise typer.BadParameter(f"harness '{run_config.harness.name}' has no headless driver; use claude or opencode")
+    run_dir = _run_dir(run_config, runs_dir, name)
+    _check_new(run_dir, "choose another --name")
+    failure = image = None
     try:
-        subprocess.run(run_args, check=True)
-        try:
-            for copy in package_copies:
-                subprocess.run(
-                    ["docker", "exec", container_name, "mkdir", "-p", copy.container_path],
-                    check=True,
-                )
-                subprocess.run(
-                    [
-                        "docker",
-                        "cp",
-                        f"{copy.host_path}/.",
-                        f"{container_name}:{copy.container_path}/",
-                    ],
-                    check=True,
-                )
-            if setup_commands:
-                subprocess.run(
-                    ["docker", "exec", container_name, "sh", "-c", " && ".join(setup_commands)],
-                    check=True,
-                )
-            subprocess.run(["docker", "exec", "-it", container_name, "bash"], check=False)
-        finally:
-            subprocess.run(["docker", "rm", "-f", container_name], check=False)
+        image = _docker_setup(run_config, build, config)
+    except typer.Exit as exc:
+        failure = f"Docker setup failed before turn 1 with exit code {exc.exit_code}; see stderr"
+    _claim(run_dir, "choose another --name")
+    prepared = _prepare(run_config, run_dir, image, resume=False, headless=True)
+    raise typer.Exit(run_headless(prepared, turn, timeout, failure))
+
+
+def _load(config: Path, env_file: Path | None) -> RunConfig:
+    try:
+        return load_config(config, env_file)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _run_dir(config: RunConfig, runs_dir: Path | None, name: str | None) -> Path:
+    runs_root = runs_dir.expanduser().resolve() if runs_dir else config.root / "runs"
+    return runs_root / (name or _run_id(config.harness.name))
+
+
+def _check_new(run_dir: Path, hint: str) -> None:
+    if run_dir.exists():
+        raise typer.BadParameter(f"run '{run_dir.name}' already exists at {run_dir} ({hint})")
+
+
+def _claim(run_dir: Path, hint: str) -> None:
+    try:
+        run_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise typer.BadParameter(f"run '{run_dir.name}' already exists at {run_dir} ({hint})") from exc
+
+
+def _docker_setup(config: RunConfig, build: bool, config_path: Path) -> dict[str, Any]:
+    # Docker Desktop treats non-zero `docker run` exits (e.g. shell exit after
+    # Ctrl-C → status 130) as "container errors" and prints Gordon tips.
+    os.environ.setdefault("DOCKER_CLI_HINTS", "false")
+    _ensure_docker()
+    if config.network:
+        _check_network(config.network)
+    if build:
+        _build_image(config.harness.name, config.harness_version)
+    return _image_record(config.harness.name, config.harness_version, config_path)
+
+
+def _prepare(
+    config: RunConfig, run_dir: Path, image: dict[str, Any] | None, *, resume: bool, headless: bool
+) -> PreparedRun:
+    try:
+        return prepare_run(config, run_dir, image, resume=resume, headless=headless)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _shell_with_copied_packages(run: PreparedRun) -> None:
+    try:
+        start_container(run)
+        subprocess.run(["docker", "exec", "-it", run.container, "bash"], check=False)
     except FileNotFoundError:
         _fail_docker_missing()
     except subprocess.CalledProcessError as exc:
@@ -309,18 +283,6 @@ _DOCKER_UNREACHABLE = (
 )
 
 
-def _docker_daemon_unreachable(text: str) -> bool:
-    lower = text.lower()
-    return any(
-        needle in lower
-        for needle in (
-            "cannot connect to the docker daemon",
-            "failed to connect to the docker api",
-            "is the docker daemon running",
-        )
-    )
-
-
 def _ensure_docker() -> None:
     """Fail fast with a clear message when Docker isn't usable."""
     try:
@@ -356,7 +318,7 @@ def _fail_docker_command(exc: subprocess.CalledProcessError) -> NoReturn:
         for part in (exc.stderr, exc.stdout)
         if part
     )
-    if _docker_daemon_unreachable(combined):
+    if docker_daemon_unreachable(combined):
         typer.secho(_DOCKER_UNREACHABLE, fg=typer.colors.RED, err=True)
     else:
         # Docker run argv contains provider credentials. Keep diagnostics useful
@@ -413,26 +375,6 @@ def _image_record(harness: str, pinned: str | None, config: Path) -> dict[str, A
     return {"name": image, "id": info["Id"], "harness_version": installed}
 
 
-def _ahl_record() -> dict[str, Any]:
-    source = Path(__file__).resolve()
-
-    def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", "-C", str(source.parent), *args], capture_output=True, text=True, check=False
-        )
-
-    sha = dirty = None
-    try:
-        # A wheel installed into a virtualenv inside another repository's work tree
-        # must not report that repository's commit, so require AHL's own file to be tracked.
-        if git("ls-files", "--error-unmatch", source.name).returncode == 0:
-            sha = git("rev-parse", "HEAD").stdout.strip()
-            dirty = bool(git("status", "--porcelain", "--untracked-files=no").stdout.strip())
-    except FileNotFoundError:
-        pass
-    return {"version": version("agent-harness-lab"), "git_sha": sha, "git_dirty": dirty}
-
-
 def _check_resumable(run_dir: Path, config: RunConfig) -> None:
     """Guard against resuming a run directory laid out for a different harness.
 
@@ -453,52 +395,6 @@ def _check_resumable(run_dir: Path, config: RunConfig) -> None:
             f"run '{run_dir.name}' was started with harness '{previous_harness}', "
             f"but config.yaml now selects '{config.harness.name}' — can't resume across harnesses"
         )
-
-
-def _write_session(
-    run_dir: Path,
-    config: RunConfig,
-    run_id: str,
-    workspace_dir: Path,
-    permissions: PermissionSetup,
-    image: dict[str, Any],
-    *,
-    resumed: bool,
-) -> None:
-    session_path = run_dir / "session.json"
-    now = datetime.now(timezone.utc).isoformat()
-
-    started_at = now
-    resumed_at: list[str] = []
-    if resumed and session_path.is_file():
-        try:
-            previous = json.loads(session_path.read_text())
-        except json.JSONDecodeError:
-            previous = {}
-        started_at = previous.get("started_at", now)
-        resumed_at = list(previous.get("resumed_at", []))
-        resumed_at.append(now)
-
-    record: dict[str, Any] = {
-        "ahl": _ahl_record(),
-        "image": image,
-        "permissions": {
-            "deny": sorted(config.permissions.deny),
-            "applied": sorted(permissions.applied),
-            "unsupported": dict(sorted(permissions.unsupported.items())),
-        },
-        "run_id": run_id,
-        "started_at": started_at,
-        "harness": config.harness.name,
-        "provider": config.provider.name,
-        "model": config.model.name or None,
-        "workspace": str(workspace_dir),
-        "workspace_install": config.workspace.install,
-        "workspace_template": str(config.workspace.path) if config.workspace.path else None,
-    }
-    if resumed_at:
-        record["resumed_at"] = resumed_at
-    session_path.write_text(json.dumps(record, indent=2, sort_keys=True))
 
 
 def _run_id(harness: str) -> str:

@@ -13,14 +13,26 @@ from ahl.capabilities import Capability
 from ahl.config import RunConfig
 from ahl.permissions import PermissionPolicy, PermissionSetup
 from ahl.harnesses.base import (
+    TurnOutcome,
     Volumes,
+    json_lines,
     native_skill_mount,
     provider_key,
     warn_unsupported_mcp,
 )
+from ahl.trace import event
 
 CONTAINER_CLAUDE_HOME = "/root/.claude"
 CONTAINER_WORKSPACE_SKILLS = "/workspace/.claude/skills"
+ASK_USER_TOOL = "AskUserQuestion"
+MODEL_ALIASES = (
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+)
 
 # Token fields Claude Code records under `message.usage` on assistant records.
 # Keep base counters separate from the cache lifetime breakdown, which must
@@ -68,8 +80,53 @@ class ClaudePermissions:
         )
 
 
+class ClaudeDriver:
+    def applied_model_parameters(self, config: RunConfig) -> frozenset[str]:
+        return frozenset()
+
+    def env(self, config: RunConfig) -> dict[str, str]:
+        # As root, Claude Code refuses --dangerously-skip-permissions unless told it runs in a sandbox.
+        env = {"IS_SANDBOX": "1"}
+        if config.provider.name == "openrouter":
+            env |= dict.fromkeys(MODEL_ALIASES, config.model.name)
+        return env
+
+    def command(self, config: RunConfig, session_id: str | None) -> list[str]:
+        command = [
+            "claude", "-p", "--output-format", "stream-json", "--verbose",
+            "--dangerously-skip-permissions", "--disallowedTools", ASK_USER_TOOL,
+        ]
+        if config.model.name:
+            command += ["--model", config.model.name]
+        return [*command, "--resume", session_id] if session_id else command
+
+    def session_id(self, stdout: str) -> str | None:
+        ids = [e["session_id"] for e in json_lines(stdout) if isinstance(e.get("session_id"), str)]
+        return ids[-1] if ids else None
+
+    def outcome(self, exit_code: int, stdout: str) -> TurnOutcome:
+        events = json_lines(stdout)
+        result = next((e for e in reversed(events) if e.get("type") == "result"), {})
+        provider = result.get("terminal_reason") == "api_error" or result.get("api_error_status") is not None
+        detail = result.get("result") or "; ".join(map(str, result.get("errors") or []))
+        if exit_code:
+            message = f"claude exited with code {exit_code}" + (f": {detail}" if detail else "")
+            return TurnOutcome("failed", "provider_error" if provider else "harness_exit", message)
+        if result.get("is_error"):
+            reason = "provider_error" if provider else "harness_reported_error"
+            return TurnOutcome("failed", reason, detail or f"claude reported {result.get('subtype')}")
+        replies = [e["message"] for e in events if e.get("type") == "assistant" and isinstance(e.get("message"), dict)]
+        if not any(_extract_message_text(reply.get("content")).strip() for reply in replies):
+            return TurnOutcome("failed", "no_assistant_output", "claude produced no assistant message")
+        return TurnOutcome("completed")
+
+    def trace(self, run_dir: Path) -> list[dict[str, Any]]:
+        return _trace_events(run_dir / "claude")
+
+
 class ClaudeAdapter:
     permission_handler = ClaudePermissions()
+    driver = ClaudeDriver()
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
         if config.provider.name == "openrouter":
@@ -284,15 +341,7 @@ def _record_usage(
     if not isinstance(usage, dict):
         return
 
-    message_id, uuid = message.get("id"), record.get("uuid")
-    identity: _ResponseId
-    if isinstance(message_id, str) and message_id:
-        identity = ("message", message_id)
-    elif isinstance(uuid, str) and uuid:
-        identity = ("uuid", uuid)
-    else:
-        identity = ("source", source, line_number)
-
+    identity = _response_identity(record, source, line_number)
     cache = usage.get("cache_creation")
     if not isinstance(cache, dict):
         cache = {}
@@ -305,6 +354,105 @@ def _record_usage(
     stop_reason = message.get("stop_reason")
     snapshot = _ResponseUsage(counters, isinstance(stop_reason, str) and bool(stop_reason))
     responses.setdefault(identity, _ResponseUsage()).merge(snapshot)
+
+
+def _response_identity(record: dict[str, Any], source: str, line_number: int) -> _ResponseId:
+    message_id, uuid = record["message"].get("id"), record.get("uuid")
+    if isinstance(message_id, str) and message_id:
+        return ("message", message_id)
+    if isinstance(uuid, str) and uuid:
+        return ("uuid", uuid)
+    return ("source", source, line_number)
+
+
+def _trace_events(home: Path) -> list[dict[str, Any]]:
+    records: list[tuple[dict[str, Any], str, int]] = []
+    seen: set[str] = set()
+    for path in sorted((home / "projects").glob("**/*.jsonl")):
+        source = str(path.relative_to(home))
+        for line_number, record in enumerate(json_lines(path.read_text(errors="replace")), start=1):
+            uuid = record.get("uuid")
+            if isinstance(uuid, str) and uuid in seen:
+                continue
+            seen.add(uuid)
+            records.append((record, source, line_number))
+
+    ledger: _ResponseLedger = {}
+    results: dict[str, tuple[str, bool]] = {}
+    for record, source, line_number in records:
+        _record_usage(ledger, record, source, line_number)
+        for block in _blocks(record):
+            if block.get("type") == "tool_result" and block.get("tool_use_id"):
+                results[str(block["tool_use_id"])] = (_extract_text(block.get("content")), bool(block.get("is_error")))
+
+    items: list[dict[str, Any]] = []
+    responses: dict[_ResponseId, dict[str, Any]] = {}
+    for record, source, line_number in records:
+        kind, message = record.get("type"), record.get("message")
+        header = (
+            record.get("sessionId"),
+            record.get("agentId") if record.get("isSidechain") else "main",
+            record.get("timestamp"),
+        )
+        if kind == "system" and isinstance(record.get("content"), str) and record["content"]:
+            items.append(event("message", *header, role="system", text=record["content"], reasoning=None))
+        if not isinstance(message, dict):
+            continue
+        if kind == "user" and (text := _extract_message_text(message.get("content"))):
+            injected = record.get("isMeta") or any(b.get("type") == "tool_result" for b in _blocks(record))
+            items.append(event("message", *header, role="system" if injected else "user", text=text, reasoning=None))
+        elif kind == "assistant" and record.get("isApiErrorMessage"):
+            text = _extract_message_text(message.get("content")) or "API error"
+            items.append(event("error", *header, message=text))
+        elif kind == "assistant":
+            identity = _response_identity(record, source, line_number)
+            if identity not in responses:
+                responses[identity] = {"identity": identity, "header": header, "message": message, "blocks": []}
+                items.append(responses[identity])
+            blocks = responses[identity]["blocks"]
+            blocks += [block for block in _blocks(record) if block not in blocks]
+
+    events: list[dict[str, Any]] = []
+    for item in items:
+        events += _response_events(item, ledger, results) if "blocks" in item else [item]
+    return sorted(events, key=lambda e: e["ts"] or "")
+
+
+def _blocks(record: dict[str, Any]) -> list[dict[str, Any]]:
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return [block for block in content if isinstance(block, dict)] if isinstance(content, list) else []
+
+
+def _response_events(
+    response: dict[str, Any], ledger: _ResponseLedger, results: dict[str, tuple[str, bool]]
+) -> list[dict[str, Any]]:
+    header, message, blocks = response["header"], response["message"], response["blocks"]
+
+    def joined(kind: str, key: str) -> str:
+        return "\n".join(b[key] for b in blocks if b.get("type") == kind and isinstance(b.get(key), str) and b[key])
+
+    text, reasoning = joined("text", "text"), joined("thinking", "thinking")
+    events = [event("message", *header, role="assistant", text=text, reasoning=reasoning or None)] if text or reasoning else []
+    for block in blocks:
+        if block.get("type") == "tool_use":
+            output, is_error = results.get(str(block.get("id")), (None, None))
+            tool_input = block.get("input")
+            events.append(event(
+                "tool_call", *header, id=block.get("id"), tool=str(block.get("name")),
+                input=tool_input if isinstance(tool_input, (dict, str)) else {}, output=output, is_error=is_error,
+            ))
+    usage = ledger.get(response["identity"])
+    if usage and message.get("model") != "<synthetic>":
+        counters = usage.counters
+        events.append(event(
+            "usage", *header, model=message.get("model"), response_id=message.get("id"),
+            input_tokens=counters.get("input_tokens"), output_tokens=counters.get("output_tokens"),
+            cache_read_tokens=counters.get("cache_read_input_tokens"),
+            cache_write_tokens=counters.get("cache_creation_input_tokens"),
+            reasoning_tokens=None, cost_usd=None,
+        ))
+    return events
 
 
 def _usage_summary(responses: _ResponseLedger) -> dict[str, Any]:

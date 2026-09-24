@@ -15,10 +15,13 @@ class StubDriver:
     def command(self, config, session_id):
         return ["sh", "-c", os.environ["AHL_STUB_TURN"]]
 
+    def session_id(self, stdout):
+        return None
+
     def outcome(self, exit_code, stdout):
         if exit_code:
-            return TurnOutcome("failed", "harness_exit", f"stub exited with code {exit_code}", None)
-        return TurnOutcome("completed", None, None, None)
+            return TurnOutcome("failed", "harness_exit", f"stub exited with code {exit_code}")
+        return TurnOutcome("completed")
 
     def trace(self, run_dir):
         return []

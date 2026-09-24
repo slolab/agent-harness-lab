@@ -82,6 +82,7 @@ class DeepSeekPermissions:
 
 class DeepSeekAdapter:
     permission_handler = DeepSeekPermissions()
+    driver = None
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
         return {"DSH_HOME": HOME, "OPENROUTER_API_KEY": provider_key(config)}

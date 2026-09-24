@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/slolab/agent-harness-lab/blob/main/src/ahl/schemas/trace_event.schema.json",
+  "title": "AHL trace event",
+  "description": "One line of trace.jsonl. Unknown values are null. See docs/trace-schema.md.",
+  "type": "object",
+  "required": ["seq", "type", "session", "agent", "turn", "ts"],
+  "properties": {
+    "seq": {"type": "integer", "minimum": 0},
+    "type": {"enum": ["message", "tool_call", "usage", "error"]},
+    "session": {"type": ["string", "null"]},
+    "agent": {"type": "string", "minLength": 1},
+    "turn": {"type": ["integer", "null"], "minimum": 1},
+    "ts": {"type": ["string", "null"], "format": "date-time"}
+  },
+  "oneOf": [
+    {
+      "required": ["role", "text", "reasoning"],
+      "properties": {
+        "type": {"const": "message"},
+        "role": {"enum": ["user", "assistant", "system"]},
+        "text": {"type": "string"},
+        "reasoning": {"type": ["string", "null"]}
+      }
+    },
+    {
+      "required": ["id", "tool", "input", "output", "is_error"],
+      "properties": {
+        "type": {"const": "tool_call"},
+        "id": {"type": ["string", "null"]},
+        "tool": {"type": "string"},
+        "input": {"type": ["object", "string"]},
+        "output": {"type": ["string", "null"]},
+        "is_error": {"type": ["boolean", "null"]},
+        "output_truncated": {"type": "boolean"},
+        "output_original_length": {"type": "integer", "minimum": 0}
+      }
+    },
+    {
+      "required": [
+        "model", "response_id", "input_tokens", "output_tokens", "cache_read_tokens",
+        "cache_write_tokens", "reasoning_tokens", "cost_usd"
+      ],
+      "properties": {
+        "type": {"const": "usage"},
+        "model": {"type": ["string", "null"]},
+        "response_id": {"type": ["string", "null"]},
+        "input_tokens": {"$ref": "#/$defs/tokens"},
+        "output_tokens": {"$ref": "#/$defs/tokens"},
+        "cache_read_tokens": {"$ref": "#/$defs/tokens"},
+        "cache_write_tokens": {"$ref": "#/$defs/tokens"},
+        "reasoning_tokens": {"$ref": "#/$defs/tokens"},
+        "cost_usd": {"type": ["number", "null"]}
+      }
+    },
+    {
+      "required": ["message"],
+      "properties": {
+        "type": {"const": "error"},
+        "message": {"type": "string"}
+      }
+    }
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "tokens": {"type": ["integer", "null"], "minimum": 0}
+  }
+}

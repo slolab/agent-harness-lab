@@ -8,8 +8,10 @@ capability bundles (skills/MCP) into it, and parse its native logs back out.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -19,8 +21,25 @@ from ahl.docker import Volumes
 from ahl.permissions import PermissionHandler
 
 
+@dataclass(frozen=True)
+class TurnOutcome:
+    status: str
+    reason: str | None = None
+    message: str | None = None
+
+
+class HeadlessDriver(Protocol):
+    def applied_model_parameters(self, config: RunConfig) -> frozenset[str]: ...
+    def env(self, config: RunConfig) -> dict[str, str]: ...
+    def command(self, config: RunConfig, session_id: str | None) -> list[str]: ...
+    def session_id(self, stdout: str) -> str | None: ...
+    def outcome(self, exit_code: int, stdout: str) -> TurnOutcome: ...
+    def trace(self, run_dir: Path) -> list[dict[str, Any]]: ...
+
+
 class HarnessAdapter(Protocol):
     permission_handler: PermissionHandler
+    driver: HeadlessDriver | None
 
     def build_env(self, config: RunConfig) -> dict[str, str]: ...
     def seed(self, run_dir: Path, config: RunConfig) -> Volumes: ...
@@ -29,6 +48,18 @@ class HarnessAdapter(Protocol):
     def start_command(self, config: RunConfig) -> str: ...
     def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]: ...
     def docker_args(self, config: RunConfig) -> list[str]: ...
+
+
+def json_lines(text: str) -> list[dict[str, Any]]:
+    records = []
+    for line in text.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
 
 
 def provider_key(config: RunConfig) -> str:
@@ -50,6 +81,8 @@ def google_env(config: RunConfig) -> dict[str, str]:
     if config.model.name:
         env["GEMINI_MODEL"] = config.model.name
     return env
+
+
 def native_skill_mount(skill: Capability, container_skills_dir: str) -> str:
     """Container path a skill should be visible at, under a harness's native skills dir."""
     return f"{container_skills_dir}/{skill.name}"

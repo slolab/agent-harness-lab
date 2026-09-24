@@ -5,13 +5,23 @@ from __future__ import annotations
 import json
 import shlex
 import sqlite3
+from collections import defaultdict
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from ahl.permissions import UnsupportedPermissions
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
-from ahl.harnesses.base import Volumes, native_skill_mount, provider_key, warn_unsupported_mcp
+from ahl.harnesses.base import (
+    TurnOutcome,
+    Volumes,
+    json_lines,
+    native_skill_mount,
+    provider_key,
+    warn_unsupported_mcp,
+)
+from ahl.permissions import PermissionPolicy, PermissionSetup
+from ahl.trace import event, iso_from_ms
 
 CONTAINER_CONFIG_DIR = "/root/.config/opencode"
 CONTAINER_DATA_DIR = "/root/.local/share/opencode"
@@ -24,10 +34,66 @@ MODEL_PROVIDER = {
     "gemini": "google",
     "vertex": "google-vertex",
 }
+WEB_PERMISSIONS = frozenset({"websearch", "webfetch"})
+PERMISSION_KEYS = (
+    "read", "edit", "glob", "grep", "list", "bash", "task", "external_directory",
+    "todowrite", "question", "webfetch", "websearch", "lsp", "doom_loop", "skill",
+)
+
+
+class OpenCodePermissions:
+    def prepare(
+        self, run_dir: Path, config: RunConfig, policy: PermissionPolicy
+    ) -> PermissionSetup:
+        applied = policy.deny & WEB_PERMISSIONS
+        path = _config_dir(run_dir) / "opencode.json"
+        settings = json.loads(path.read_text())
+        settings.pop("permission", None)
+        if applied:
+            settings["permission"] = dict.fromkeys(sorted(applied), "deny")
+        path.write_text(json.dumps(settings, indent=2) + "\n")
+        unsupported = {op: "no OpenCode native permission" for op in sorted(policy.deny - applied)}
+        return PermissionSetup([], applied, unsupported)
+
+
+class OpenCodeDriver:
+    def applied_model_parameters(self, config: RunConfig) -> frozenset[str]:
+        return frozenset({"provider"}) if config.provider.name == "openrouter" else frozenset()
+
+    def env(self, config: RunConfig) -> dict[str, str]:
+        # `opencode run` rejects every `ask` rule without waiting, and the defaults differ between versions.
+        permission = dict.fromkeys(PERMISSION_KEYS, "allow") | {"question": "deny"}
+        permission |= dict.fromkeys(sorted(config.permissions.deny & WEB_PERMISSIONS), "deny")
+        return {"OPENCODE_PERMISSION": json.dumps(permission)}
+
+    def command(self, config: RunConfig, session_id: str | None) -> list[str]:
+        command = ["opencode", "run", "--format", "json", "-m", model_id(config)]
+        return [*command, "--session", session_id] if session_id else command
+
+    def session_id(self, stdout: str) -> str | None:
+        return next((e["sessionID"] for e in json_lines(stdout) if isinstance(e.get("sessionID"), str)), None)
+
+    def outcome(self, exit_code: int, stdout: str) -> TurnOutcome:
+        events = json_lines(stdout)
+        errors = [e.get("error") for e in events if e.get("type") == "error"]
+        detail = "; ".join(_error_message(error) for error in errors)
+        provider = any(isinstance(error, dict) and error.get("name") == "APIError" for error in errors)
+        if exit_code:
+            message = f"opencode exited with code {exit_code}" + (f": {detail}" if detail else "")
+            return TurnOutcome("failed", "provider_error" if provider else "harness_exit", message)
+        if errors:
+            return TurnOutcome("failed", "provider_error" if provider else "harness_reported_error", detail)
+        if not any(e.get("type") == "text" and (e.get("part") or {}).get("text", "").strip() for e in events):
+            return TurnOutcome("failed", "no_assistant_output", "opencode produced no assistant message")
+        return TurnOutcome("completed")
+
+    def trace(self, run_dir: Path) -> list[dict[str, Any]]:
+        return _trace_events(_data_dir(run_dir) / "opencode.db")
 
 
 class OpenCodeAdapter:
-    permission_handler = UnsupportedPermissions()
+    permission_handler = OpenCodePermissions()
+    driver = OpenCodeDriver()
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
         provider = config.provider.name
@@ -52,15 +118,9 @@ class OpenCodeAdapter:
             }
         raise ValueError(f"unsupported provider: {provider}")
 
-    def _config_dir(self, run_dir: Path) -> Path:
-        return run_dir / "opencode" / "config"
-
-    def _data_dir(self, run_dir: Path) -> Path:
-        return run_dir / "opencode" / "data"
-
     def seed(self, run_dir: Path, config: RunConfig) -> Volumes:
-        config_dir = self._config_dir(run_dir)
-        data_dir = self._data_dir(run_dir)
+        config_dir = _config_dir(run_dir)
+        data_dir = _data_dir(run_dir)
         _seed_state(config_dir, data_dir, config)
         return [
             (config_dir, CONTAINER_CONFIG_DIR),
@@ -82,7 +142,7 @@ class OpenCodeAdapter:
         return volumes
 
     def parse_trace(self, run_dir: Path) -> dict[str, Any] | None:
-        return _parse_trace(self._data_dir(run_dir))
+        return _parse_trace(_data_dir(run_dir))
 
     def start_command(self, config: RunConfig) -> str:
         return shlex.join(["opencode", "-m", model_id(config)])
@@ -97,6 +157,14 @@ class OpenCodeAdapter:
 
     def docker_args(self, config: RunConfig) -> list[str]:
         return []
+
+
+def _config_dir(run_dir: Path) -> Path:
+    return run_dir / "opencode" / "config"
+
+
+def _data_dir(run_dir: Path) -> Path:
+    return run_dir / "opencode" / "data"
 
 
 def model_id(config: RunConfig) -> str:
@@ -125,10 +193,15 @@ def _seed_state(config_dir: Path, data_dir: Path, config: RunConfig) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "log").mkdir(exist_ok=True)
 
+    model = model_id(config)
     opencode_config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
-        "model": model_id(config),
+        "model": model,
+        "small_model": model,
     }
+    if provider == "openrouter" and "provider" in config.model.parameters:
+        routing = {"options": {"provider": config.model.parameters["provider"]}}
+        opencode_config["provider"] = {"openrouter": {"models": {config.model.name: routing}}}
     if provider == "vertex":
         params = config.provider.parameters
         opencode_config["provider"] = {
@@ -251,3 +324,97 @@ def _summarize_session(rows: list[tuple[str, str, str]]) -> dict[str, Any]:
         "assistant_messages": assistant_texts,
         "tool_calls": tool_calls,
     }
+
+
+def _trace_events(db_path: Path) -> list[dict[str, Any]]:
+    if not db_path.is_file():
+        return []
+    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
+        parents = dict(conn.execute("SELECT id, parent_id FROM session"))
+        messages = conn.execute(
+            "SELECT id, session_id, time_created, data FROM message ORDER BY time_created, id"
+        ).fetchall()
+        parts: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for message_id, data in conn.execute("SELECT message_id, data FROM part ORDER BY message_id, id"):
+            parts[message_id].append(json.loads(data))
+
+    events: list[dict[str, Any]] = []
+    for message_id, session, created, raw in messages:
+        info = json.loads(raw)
+        header = (session, session if parents.get(session) else "main", iso_from_ms(created))
+        message_parts = parts[message_id]
+        if info.get("role") == "user":
+            for role, synthetic in (("user", False), ("system", True)):
+                if text := _joined(message_parts, "text", synthetic):
+                    events.append(event("message", *header, role=role, text=text, reasoning=None))
+            continue
+        text, reasoning = _joined(message_parts, "text"), _joined(message_parts, "reasoning")
+        if text or reasoning:
+            events.append(event("message", *header, role="assistant", text=text, reasoning=reasoning or None))
+        events += [_tool_call(header, part) for part in message_parts if part.get("type") == "tool"]
+        if usage := _usage(info):
+            events.append(event("usage", *header, **usage))
+        if info.get("error"):
+            events.append(event("error", *header, message=_error_message(info["error"])))
+    return events
+
+
+def _joined(parts: list[dict[str, Any]], kind: str, synthetic: bool = False) -> str:
+    return "\n".join(
+        part["text"]
+        for part in parts
+        if part.get("type") == kind and bool(part.get("synthetic")) == synthetic and isinstance(part.get("text"), str)
+        and part["text"]
+    )
+
+
+def _tool_call(header: tuple[str, str, str | None], part: dict[str, Any]) -> dict[str, Any]:
+    state = part.get("state") or {}
+    status = state.get("status")
+    output = {"completed": state.get("output"), "error": state.get("error")}.get(status)
+    tool_input = state.get("input")
+    return event(
+        "tool_call",
+        *header,
+        id=part.get("callID"),
+        tool=str(part.get("tool")),
+        input=tool_input if isinstance(tool_input, (dict, str)) else {},
+        output=output if isinstance(output, str) else None,
+        is_error={"completed": False, "error": True}.get(status),
+    )
+
+
+def _usage(info: dict[str, Any]) -> dict[str, Any] | None:
+    tokens = info.get("tokens")
+    if info.get("role") != "assistant" or not isinstance(tokens, dict):
+        return None
+    cache = tokens.get("cache") or {}
+    output, reasoning = _count(tokens.get("output")), _count(tokens.get("reasoning"))
+    counts = {
+        "input_tokens": _count(tokens.get("input")),
+        "output_tokens": None if output is None or reasoning is None else output + reasoning,
+        "cache_read_tokens": _count(cache.get("read")),
+        "cache_write_tokens": _count(cache.get("write")),
+    }
+    if not any(counts.values()):
+        return None
+    cost = info.get("cost")
+    return {
+        "model": info.get("modelID"),
+        "response_id": None,
+        **counts,
+        "reasoning_tokens": reasoning,
+        "cost_usd": cost if isinstance(cost, (int, float)) else None,
+    }
+
+
+def _count(value: Any) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _error_message(error: Any) -> str:
+    if not isinstance(error, dict):
+        return str(error)
+    data = error.get("data")
+    message = data.get("message") if isinstance(data, dict) else None
+    return str(message or error.get("name") or "unknown error")
