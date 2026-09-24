@@ -76,6 +76,8 @@ also pins its dependency graph, including the 0.1.5-rc.2 DSH dependencies
 selected by the CLI's published ranges. Builds use `npm ci --omit=dev` and
 retain optional native packages for Linux arm64 and amd64. Upgrading requires
 rechecking the actual installed persistence, settings, and browser contracts.
+The image's `ahl.harness.version` label repeats the CLI version; change it
+together with the lock. A unit test fails when they differ.
 
 ## Native trace summary
 
@@ -117,8 +119,8 @@ boundaries, and real Node relay sockets/process cleanup. Run:
 ```bash
 uv run pytest
 uv run ruff check .
-docker build --platform linux/arm64 -t agent-harness-lab:deepseek -f docker/deepseek.Dockerfile docker
-docker build --platform linux/amd64 -t agent-harness-lab:deepseek-amd64 -f docker/deepseek.Dockerfile docker
+docker build --platform linux/arm64 -t agent-harness-lab:deepseek -f src/ahl/images/deepseek.Dockerfile src/ahl/images
+docker build --platform linux/amd64 -t agent-harness-lab:deepseek-amd64 -f src/ahl/images/deepseek.Dockerfile src/ahl/images
 ```
 
 For a browser smoke test, check the token URL and subsequent clean URL,

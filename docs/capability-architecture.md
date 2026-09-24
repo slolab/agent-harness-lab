@@ -56,7 +56,7 @@ A harness lacking support for a capability kind degrades to the fallback (or a n
 
 Separate from wiring: makes sure the capability's underlying package/checkout is actually present in the container before the wirer can point a harness at it.
 
-- `install: pip` → a `RUN pip install <name>[==version]` line baked into the relevant `docker/<harness>.Dockerfile` at build time.
+- `install: pip` → a `RUN pip install <name>[==version]` line baked into the relevant `src/ahl/images/<harness>.Dockerfile` at build time.
 - `install: mount` → volume-mount the host checkout (same mechanism `cli.py` already uses for `extra_volumes`) and run an editable install at container start.
 - Skill `install: copy`/`npx` → run the external skills installer globally and non-interactively before the harness shell starts.
 

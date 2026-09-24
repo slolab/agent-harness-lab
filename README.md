@@ -37,6 +37,28 @@ This builds the harness image and drops you into an interactive shell at
 `/workspace`. Run the harness yourself (e.g. `gemini`, `opencode`, `claude`).
 Exit the shell to stop.
 
+### Using AHL from another repository
+
+The config, env file and runs directory do not need to live in the AHL
+checkout. Relative paths inside the config (`workspace`, `capabilities[].path`,
+`packages[].path`, `mounts[].path`) resolve against the config file's
+directory. Command-line paths resolve against the working directory.
+
+```bash
+ahl build --harness opencode            # or: ahl build -c path/to/config.yaml
+ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
+```
+
+- `ahl build` builds `agent-harness-lab:<harness>` from the image files shipped
+  inside the installed package. It needs no provider key and reads no env file;
+  with `-c` it reads only `harness`. `ahl up` builds the same way unless you
+  pass `--no-build`.
+- `--env-file PATH` loads that file, and its keys win over shell variables.
+  A missing file is an error. Without the flag, `ahl up` reads `.env` next to
+  the config, and shell variables win over it.
+- `--runs-dir DIR` puts the run at `DIR/<run id>`; `--name` and `--resume`
+  look inside `DIR`. The default is `runs/` next to the config.
+
 ## Configuration
 
 Two files, clean split:
@@ -77,6 +99,19 @@ for the full annotated reference, including:
   (`uv tool install` for CLIs, `uv pip install --system` for libraries).
   `install: mount` bind-mounts read-only; `install: copy` snapshots then
   `docker cp`s into the container (writable — needed for setuptools editable).
+  Optional `extras: [graph]` installs the package's extras in both modes; for
+  a CLI they land in the tool's own environment.
+- **`mounts`** — extra bind mounts, e.g. a dataset:
+  `{path: ../datasets/unpacked, target: /workspace/data}`. The source must
+  exist; the target must be absolute, unique and not `/workspace` itself.
+  Mounts are read-only unless `readonly: false`.
+- **`network`** — the name of an existing Docker network to join, e.g. a
+  Compose project's `my-project_default`, so the harness can reach its
+  services. A network that does not exist is an error.
+- **`env`** — non-secret environment variables for the container, as string
+  values, e.g. `NEO4J_URI: bolt://neo4j:7687`. Provider key variables and
+  variables the selected harness adapter sets are rejected; keys belong in
+  `.env`.
 
 Runs are named: `ahl up --name my-run` uses `runs/my-run/` instead of the
 default `<timestamp>-<harness>` id. `ahl up --resume my-run` continues that
@@ -117,13 +152,24 @@ available. See [permissions and handler extensions](docs/permissions.md).
 
 Auth is either pre-seeded or completed interactively per harness; `ahl up`
 prints the exact launch command and harness-specific hints. Add a harness by
-adding `docker/<harness>.Dockerfile` and a `src/ahl/harnesses/<harness>.py`
+adding `src/ahl/images/<harness>.Dockerfile` and a `src/ahl/harnesses/<harness>.py`
 adapter — see `CLAUDE.md`.
+
+Claude Code, OpenCode and uv are pinned to exact versions by the `ARG`
+defaults in their Dockerfiles; DeepSeek is pinned by its npm lockfile. Gemini
+CLI, agy and Claude Science install their latest release. Every image carries
+the label `ahl.harness=<name>`, and the pinned harness images also carry
+`ahl.harness.version=<version>`. To move a pin, edit the `ARG` default and
+rebuild with `ahl build`.
 
 ## Observability
 
 Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
-workspace mode, timestamp, permissions). **gemini**, **opencode**, **claude**, and **deepseek** persist
+workspace mode, timestamp, permissions) with provenance: `ahl` holds the AHL
+version and, when AHL runs from a git checkout, its commit and whether the
+checkout has uncommitted changes (`git_sha`, `git_dirty`, otherwise null);
+`image` holds the name, ID and `ahl.harness.version` label of the image the
+container started from, also with `--no-build`. **gemini**, **opencode**, **claude**, and **deepseek** persist
 their own session state under `runs/<id>/` and get a normalized `trace.json`
 on exit (sessions, messages, tool calls). Claude Science tracing is an
 explicit non-goal for its initial harness; **agy** still has no confirmed log
@@ -186,7 +232,7 @@ pinning, browser acceptance, and trace limitations.
 For key-based harnesses, the selected provider key is injected as an env var;
 Claude login harnesses receive no provider key. Egress is currently
 **unrestricted** —
-`docker/init-firewall.sh` is a permissive passthrough kept as the hook point
+`src/ahl/images/init-firewall.sh` is a permissive passthrough kept as the hook point
 for re-enabling default-deny egress later. Local mount-mode capability and
 package sources are read-only, so an agent cannot write back into your
 checkout. Skills installed through `npx skills` are writable but remain
@@ -194,7 +240,7 @@ in run-owned state when the adapter persists their native directory.
 
 ## What is tracked
 
-Tracked: `src/`, `docker/`, `docs/`, `tests/`, `.github/`, `pyproject.toml`,
+Tracked: `src/` (including the image files in `src/ahl/images/`), `docs/`, `tests/`, `.github/`, `pyproject.toml`,
 `uv.lock`, `config.example.yaml`, `.env.example`. Untracked local state: `config.yaml`, `.env`, `runs/`,
 `projects/`.
 
