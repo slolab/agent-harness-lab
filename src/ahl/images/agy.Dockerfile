@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG NODE_VERSION=22.20.0
-ARG UV_VERSION=0.12.18
+ARG UV_VERSION=latest
 
 FROM debian:bookworm-slim AS build
 ENV DEBIAN_FRONTEND=noninteractive

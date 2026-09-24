@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import subprocess
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ import yaml
 from ahl.config import PROVIDER_KEY_ENV, RunConfig, load_config
 
 _real_run = subprocess.run
+NPM_RELEASES = {"@anthropic-ai/claude-code": "2.1.281", "opencode-ai": "1.18.32"}
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +33,7 @@ class DockerStub:
     image_id: str | None = "sha256:" + "ab" * 32
     labels: dict[str, str] = field(default_factory=dict)
     ahl_tracked: bool = True
+    registry_requests: list[str] = field(default_factory=list)
 
     def __call__(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
         if args[0] == "git":
@@ -50,6 +54,11 @@ class DockerStub:
             return subprocess.CompletedProcess(args, 0 if args[3] in self.networks else 1, "[]", "")
         return subprocess.CompletedProcess(args, 0, "", "")
 
+    def urlopen(self, url: str, **kwargs: Any) -> io.BytesIO:
+        self.registry_requests.append(url)
+        package = url.removeprefix("https://registry.npmjs.org/").removesuffix("/latest")
+        return io.BytesIO(json.dumps({"version": NPM_RELEASES[package]}).encode())
+
     def launches(self) -> list[list[str]]:
         return [c for c in self.calls if c[:2] == ["docker", "run"]]
 
@@ -61,6 +70,7 @@ class DockerStub:
 def docker(monkeypatch: pytest.MonkeyPatch) -> DockerStub:
     stub = DockerStub()
     monkeypatch.setattr(subprocess, "run", stub)
+    monkeypatch.setattr(urllib.request, "urlopen", stub.urlopen)
     return stub
 
 

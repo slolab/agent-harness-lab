@@ -8,6 +8,7 @@ import select
 import subprocess
 import sys
 import time
+import urllib.request
 from importlib import resources
 from pathlib import Path
 
@@ -18,10 +19,8 @@ from ahl.config import SUPPORTED_HARNESSES
 
 IMAGES = resources.files("ahl") / "images"
 EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+")
-PINNED = {
-    "claude": ("CLAUDE_CODE_VERSION", "@anthropic-ai/claude-code"),
-    "opencode": ("OPENCODE_VERSION", "opencode-ai"),
-}
+PACKAGES = {"claude": "@anthropic-ai/claude-code", "opencode": "opencode-ai"}
+PINNED = {"claude": "2.1.273", "opencode": "1.18.31"}
 
 
 def resolved_dockerfile(harness: str) -> tuple[dict[str, str], str]:
@@ -30,35 +29,37 @@ def resolved_dockerfile(harness: str) -> tuple[dict[str, str], str]:
     return defaults, re.sub(r"\$\{(\w+)\}", lambda m: defaults.get(m[1], m[0]), text)
 
 
-def test_a1_ac4_dockerfiles_pin_versions_and_label_every_image():
-    lock = json.loads((IMAGES / "deepseek/package-lock.json").read_text())
-    dsh_version = lock["packages"]["node_modules/@deepseek-ai/dsh"]["version"]
+def test_a1_ac4_dockerfiles_hard_code_no_versions_and_label_every_image():
     harnesses = sorted(p.name.removesuffix(".Dockerfile") for p in IMAGES.iterdir() if p.name.endswith(".Dockerfile"))
     assert harnesses == sorted(SUPPORTED_HARNESSES)
 
     for harness in harnesses:
         defaults, text = resolved_dockerfile(harness)
-        uv_tags = re.findall(r"ghcr\.io/astral-sh/uv:(\S+)", text)
-        assert uv_tags and all(EXACT_VERSION.fullmatch(tag) for tag in uv_tags), harness
+        assert not [arg for arg, value in defaults.items() if arg != "NODE_VERSION" and EXACT_VERSION.search(value)]
+        assert set(re.findall(r"ghcr\.io/astral-sh/uv:(\S+)", text)) == {"latest"}, harness
+        raw = (IMAGES / f"{harness}.Dockerfile").read_text()
         labels = dict(
             pair.split("=", 1)
-            for line in re.findall(r"^LABEL (.+)$", text, re.M)
+            for line in re.findall(r"^LABEL (.+)$", raw, re.M)
             for pair in line.split()
         )
         expected = {"ahl.harness": harness}
-        if harness in PINNED:
-            arg, package = PINNED[harness]
-            version = defaults[arg]
-            assert EXACT_VERSION.fullmatch(version), harness
-            assert f"{package}@{version}" in text, harness
-            expected["ahl.harness.version"] = version
-        if harness == "deepseek":
-            expected["ahl.harness.version"] = dsh_version
+        if harness in {*PACKAGES, "deepseek"}:
+            expected["ahl.harness.version"] = "${HARNESS_VERSION}"
         assert labels == expected, harness
 
 
 def docker(*args: str) -> str:
     return subprocess.run(["docker", *args], capture_output=True, text=True, check=True).stdout
+
+
+def installed_version(image: str, harness: str) -> str:
+    return EXACT_VERSION.search(docker("run", "--rm", image, harness, "--version"))[0]
+
+
+def current_release(harness: str) -> str:
+    with urllib.request.urlopen(f"https://registry.npmjs.org/{PACKAGES[harness]}/latest", timeout=30) as response:
+        return json.load(response)["version"]
 
 
 def ahl_process(*args: str, cwd: Path) -> subprocess.CompletedProcess:
@@ -99,20 +100,21 @@ def ahl_up_in_pty(*args: str, cwd: Path, command: str, timeout: float = 900) -> 
 
 @pytest.mark.docker
 @pytest.mark.parametrize("harness", ["claude", "opencode"])
-def test_a1_ac3_ac4_build_outside_checkout_labels_installed_version(tmp_path, harness):
+def test_a1_ac3_ac4_build_outside_checkout_installs_pinned_or_current_version(tmp_path, harness):
     image = f"agent-harness-lab:{harness}"
-    ids = []
+    (tmp_path / "pinned.yaml").write_text(yaml.safe_dump({"harness": harness, "harness_version": PINNED[harness]}))
 
-    for _ in range(2):
-        result = ahl_process("build", "--harness", harness, cwd=tmp_path)
-        assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
-        ids.append(docker("image", "inspect", "--format", "{{.Id}}", image))
+    for flags, expected in [(["-c", "pinned.yaml"], PINNED[harness]), (["--harness", harness], current_release(harness))]:
+        ids = []
+        for _ in range(2):
+            result = ahl_process("build", *flags, cwd=tmp_path)
+            assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+            ids.append(docker("image", "inspect", "--format", "{{.Id}}", image))
 
-    assert ids[0] == ids[1]
-    labels = json.loads(docker("image", "inspect", "--format", "{{json .Config.Labels}}", image))
-    installed = docker("run", "--rm", image, harness, "--version")
-    assert labels["ahl.harness"] == harness
-    assert labels["ahl.harness.version"] == EXACT_VERSION.search(installed)[0]
+        assert ids[0] == ids[1]
+        labels = json.loads(docker("image", "inspect", "--format", "{{json .Config.Labels}}", image))
+        assert installed_version(image, harness) == expected
+        assert labels == {"ahl.harness": harness, "ahl.harness.version": expected}
 
 
 @pytest.mark.docker
@@ -125,22 +127,21 @@ def test_a1_ac5_ac8_up_records_started_image_and_installs_extras(tmp_path):
         "[project.optional-dependencies]\ngraph = ['iniconfig']\n"
         "[build-system]\nrequires = ['hatchling']\nbuild-backend = 'hatchling.build'\n"
     )
-    (tmp_path / "config.yaml").write_text(yaml.safe_dump({
-        "harness": "claude",
-        "provider": "anthropic",
-        "packages": [{"name": "extras-lib", "install": "mount", "path": "./extras-lib", "extras": ["graph"]}],
-    }))
+    package = {"name": "extras-lib", "install": "mount", "path": "./extras-lib", "extras": ["graph"]}
     probe = "python3 -c 'import iniconfig; print(\"imported-\" + iniconfig.__name__)'"
 
-    for name, flags in [("built", []), ("prebuilt", ["--no-build"])]:
-        code, output = ahl_up_in_pty("--name", name, *flags, cwd=tmp_path, command=probe)
+    for pin, expected, version in [
+        ("pinned", PINNED["claude"], {"harness_version": PINNED["claude"]}),
+        ("current", current_release("claude"), {}),
+    ]:
+        config = {"harness": "claude", "provider": "anthropic", "packages": [package], **version}
+        (tmp_path / "config.yaml").write_text(yaml.safe_dump(config))
+        for name, flags in [(f"{pin}-built", []), (f"{pin}-prebuilt", ["--no-build"])]:
+            code, output = ahl_up_in_pty("--name", name, *flags, cwd=tmp_path, command=probe)
 
-        assert code == 0, output[-3000:]
-        assert "imported-iniconfig" in output, output[-3000:]
-        [inspected] = json.loads(docker("image", "inspect", "agent-harness-lab:claude"))
-        session = json.loads((tmp_path / "runs" / name / "session.json").read_text())
-        assert session["image"] == {
-            "name": "agent-harness-lab:claude",
-            "id": inspected["Id"],
-            "harness_version": inspected["Config"]["Labels"]["ahl.harness.version"],
-        }
+            assert code == 0, output[-3000:]
+            assert "imported-iniconfig" in output, output[-3000:]
+            image_id = docker("image", "inspect", "--format", "{{.Id}}", "agent-harness-lab:claude").strip()
+            session = json.loads((tmp_path / "runs" / name / "session.json").read_text())
+            assert installed_version(image_id, "claude") == expected
+            assert session["image"] == {"name": "agent-harness-lab:claude", "id": image_id, "harness_version": expected}

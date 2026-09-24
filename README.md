@@ -51,9 +51,9 @@ ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
 
 - `ahl build` builds `agent-harness-lab:<harness>` from the image files shipped
   inside the installed package. It needs no provider key and reads no env file;
-  with `-c` it reads only `harness`. `ahl up` builds the same way unless you
-  pass `--no-build`. Builds skip BuildKit's default attestations, so a rebuild
-  without changes keeps the image ID.
+  with `-c` it reads only `harness` and `harness_version`. `ahl up` builds the
+  same way unless you pass `--no-build`. Builds skip BuildKit's default
+  attestations, so a rebuild without changes keeps the image ID.
 - `--env-file PATH` loads that file, and its keys win over shell variables.
   A missing file is an error. Without the flag, `ahl up` reads `.env` next to
   the config, and shell variables win over it.
@@ -86,6 +86,9 @@ workspace: ./projects/demo
 mapping (e.g. Vertex needs `project`/`location`). See `config.example.yaml`
 for the full annotated reference, including:
 
+- **`harness_version`** — for `claude` and `opencode` only, e.g.
+  `harness_version: 2.1.273`: the image installs exactly that version.
+  Without it, each build installs the current release.
 - **`workspace`** — a *template*, not a live project. By default it's
   snapshotted into `runs/<id>/workspace/` fresh on every `ahl up`, so the
   same starting state is reusable across harnesses and capability versions;
@@ -156,12 +159,13 @@ prints the exact launch command and harness-specific hints. Add a harness by
 adding `src/ahl/images/<harness>.Dockerfile` and a `src/ahl/harnesses/<harness>.py`
 adapter — see `CLAUDE.md`.
 
-Claude Code, OpenCode and uv are pinned to exact versions by the `ARG`
-defaults in their Dockerfiles; DeepSeek is pinned by its npm lockfile. Gemini
-CLI, agy and Claude Science install their latest release. Every image carries
-the label `ahl.harness=<name>`, and the pinned harness images also carry
-`ahl.harness.version=<version>`. To move a pin, edit the `ARG` default and
-rebuild with `ahl build`.
+No Dockerfile hard-codes a harness version. For Claude Code and OpenCode,
+`ahl build` installs the config's `harness_version`, or else the current npm
+release, which it looks up before building. DeepSeek installs the version in
+its npm lockfile. The version is passed as the `HARNESS_VERSION` build argument
+and recorded in the image label `ahl.harness.version`. Gemini CLI, agy and
+Claude Science install their latest release and carry no version label. uv is
+not pinned. Every image carries the label `ahl.harness=<name>`.
 
 ## Observability
 

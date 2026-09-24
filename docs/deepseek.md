@@ -76,8 +76,8 @@ also pins its dependency graph, including the 0.1.5-rc.2 DSH dependencies
 selected by the CLI's published ranges. Builds use `npm ci --omit=dev` and
 retain optional native packages for Linux arm64 and amd64. Upgrading requires
 rechecking the actual installed persistence, settings, and browser contracts.
-The image's `ahl.harness.version` label repeats the CLI version; change it
-together with the lock. A unit test fails when they differ.
+`ahl build` reads the CLI version from the lock and records it in the image's
+`ahl.harness.version` label.
 
 ## Native trace summary
 

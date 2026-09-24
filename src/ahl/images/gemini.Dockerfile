@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG GEMINI_CLI_VERSION=latest
 ARG NODE_VERSION=22.20.0
-ARG UV_VERSION=0.12.18
+ARG UV_VERSION=latest
 
 FROM node:${NODE_VERSION}-bookworm-slim AS build
 ARG GEMINI_CLI_VERSION

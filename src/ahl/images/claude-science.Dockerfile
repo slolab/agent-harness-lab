@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG UV_VERSION=0.12.18
+ARG UV_VERSION=latest
 
 FROM --platform=linux/amd64 ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 

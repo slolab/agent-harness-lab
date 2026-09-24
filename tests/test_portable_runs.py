@@ -129,7 +129,7 @@ def test_a1_ac2_env_file_precedence_and_missing_key_errors(tmp_path, monkeypatch
         load_config(config)
 
 
-def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monkeypatch, docker):
+def test_a1_ac3_ac4_build_reads_harness_and_version_and_passes_the_version(tmp_path, monkeypatch, docker):
     conf = tmp_path / "conf"
     write_config(
         conf / "config.yaml",
@@ -138,6 +138,10 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
         model="qwen/qwen3.7-flash",
         packages=[{"name": "gone", "path": "./missing"}],
     )
+    write_config(conf / "pinned.yaml", harness="claude", harness_version="2.1.273")
+    write_config(conf / "gemini.yaml", harness="gemini", harness_version="1.0.0")
+    lock = json.loads((IMAGES / "deepseek/package-lock.json").read_text())
+    dsh = lock["packages"]["node_modules/@deepseek-ai/dsh"]["version"]
     cwd = tmp_path / "elsewhere"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
@@ -145,18 +149,31 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
     result = ahl_cli("build", "-c", "../conf/config.yaml")
 
     assert result.exit_code == 0, result.output
-    assert docker.builds() == [
-        ["docker", "build", "-t", "agent-harness-lab:deepseek", "-f", str(IMAGES / "deepseek.Dockerfile"), str(IMAGES)]
-    ]
+    assert docker.builds() == [[
+        "docker", "build", "-t", "agent-harness-lab:deepseek", "-f", str(IMAGES / "deepseek.Dockerfile"),
+        "--build-arg", f"HARNESS_VERSION={dsh}", str(IMAGES),
+    ]]
     assert docker.build_envs == [{**os.environ, "BUILDX_NO_DEFAULT_ATTESTATIONS": "1"}]
 
     (conf / ".env").write_text("OPENROUTER_API_KEY=must-not-load\n")
     assert ahl_cli("build", "--harness", "claude").exit_code == 0
-    assert ahl_cli("build", "-c", "../conf/config.yaml").exit_code == 0
+    assert ahl_cli("build", "-c", "../conf/pinned.yaml").exit_code == 0
+    assert ahl_cli("build", "--harness", "gemini").exit_code == 0
     assert "OPENROUTER_API_KEY" not in os.environ
-    assert [b[3] for b in docker.builds()] == [
-        "agent-harness-lab:deepseek", "agent-harness-lab:claude", "agent-harness-lab:deepseek"
+    assert [(b[3], b[6:-1]) for b in docker.builds()[1:]] == [
+        ("agent-harness-lab:claude", ["--build-arg", "HARNESS_VERSION=2.1.281"]),
+        ("agent-harness-lab:claude", ["--build-arg", "HARNESS_VERSION=2.1.273"]),
+        ("agent-harness-lab:gemini", []),
     ]
+    assert docker.registry_requests == ["https://registry.npmjs.org/@anthropic-ai/claude-code/latest"]
+    rejected = ahl_cli("build", "-c", "../conf/gemini.yaml")
+    assert rejected.exit_code == 2 and "harness_version" in rejected.output
+    keys = tmp_path / "keys.env"
+    keys.write_text("GEMINI_API_KEY=test-key\n")
+    for harness, version in [("gemini", "1.0.0"), ("opencode", "latest")]:
+        bad = write_config(conf / "bad.yaml", harness=harness, provider="gemini", harness_version=version)
+        with pytest.raises(ConfigError, match="harness_version"):
+            load_config(bad, keys)
     assert ahl_cli("build").exit_code == 2
     assert ahl_cli("build", "--harness", "claude", "-c", "../conf/config.yaml").exit_code == 2
     assert docker.launches() == []
@@ -164,17 +181,18 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
 
 def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, docker):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    config = write_config(tmp_path / "config.yaml", **OPENROUTER)
+    config = write_config(tmp_path / "config.yaml", **OPENROUTER, harness_version="1.18.31")
     (tmp_path / "lib").mkdir()
     head = subprocess.run(
         ["git", "-C", str(PACKAGE_DIR), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     ).stdout.strip()
     dirty = subprocess.run(["git", "-C", str(PACKAGE_DIR), "diff", "--quiet", "HEAD"]).returncode == 1
-    docker.labels = {"ahl.harness": "opencode", "ahl.harness.version": "1.18.32"}
+    docker.labels = {"ahl.harness": "opencode", "ahl.harness.version": "1.18.31"}
 
     built = ahl_cli("up", "-c", config, "--name", "built")
 
     assert built.exit_code == 0, built.output
+    assert "HARNESS_VERSION=1.18.31" in docker.builds()[-1]
     order = [c[:3] for c in docker.calls if c[1] in {"build", "image", "run"}]
     assert order == [["docker", "build", "-t"], ["docker", "image", "inspect"], ["docker", "run", "--rm"]]
     session = json.loads((tmp_path / "runs/built/session.json").read_text())
@@ -186,27 +204,28 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
     assert session["image"] == {
         "name": "agent-harness-lab:opencode",
         "id": docker.image_id,
-        "harness_version": "1.18.32",
+        "harness_version": "1.18.31",
     }
     assert docker.image_id in docker.launches()[-1] and session["image"]["name"] not in docker.launches()[-1]
     assert session["harness"] == "opencode" and session["run_id"] == "built"
 
-    write_config(config, **OPENROUTER, packages=[{"name": "lib", "install": "copy", "path": "./lib"}])
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    write_config(config, harness="gemini", provider="gemini", packages=[{"name": "lib", "install": "copy", "path": "./lib"}])
     docker.image_id = None
-    missing = ahl_cli("up", "-c", config, "--no-build", "--name", "unlabelled")
+    missing = ahl_cli("up", "-c", config, "--no-build", "--name", "untracked")
 
-    assert missing.exit_code == 1 and "ahl build --harness opencode" in missing.output
-    assert not (tmp_path / "runs/unlabelled").exists()
+    assert missing.exit_code == 1 and "ahl build --harness gemini" in missing.output
+    assert not (tmp_path / "runs/untracked").exists()
 
     docker.image_id = "sha256:" + "cd" * 32
-    docker.labels = {"ahl.harness": "opencode"}
+    docker.labels = {"ahl.harness": "gemini"}
     docker.ahl_tracked = False
-    unlabelled = ahl_cli("up", "-c", config, "--no-build", "--name", "unlabelled")
+    untracked = ahl_cli("up", "-c", config, "--no-build", "--name", "untracked")
 
-    assert unlabelled.exit_code == 0, unlabelled.output
+    assert untracked.exit_code == 0, untracked.output
     assert docker.launches()[-1][:4] == ["docker", "run", "--rm", "-d"] and docker.image_id in docker.launches()[-1]
-    session = json.loads((tmp_path / "runs/unlabelled/session.json").read_text())
-    assert session["image"] == {"name": "agent-harness-lab:opencode", "id": docker.image_id, "harness_version": None}
+    session = json.loads((tmp_path / "runs/untracked/session.json").read_text())
+    assert session["image"] == {"name": "agent-harness-lab:gemini", "id": docker.image_id, "harness_version": None}
     assert session["ahl"]["git_sha"] is None and session["ahl"]["git_dirty"] is None
 
 
@@ -306,10 +325,10 @@ def test_a1_ac9_defaults_read_local_env_write_local_runs_and_build(tmp_path, mon
     [run] = (tmp_path / "runs").iterdir()
     assert json.loads((run / "session.json").read_text())["run_id"] == run.name
     assert container_env(docker.launches()[-1], "OPENROUTER_API_KEY") == "dotenv-key"
-    assert docker.builds() == [
-        ["docker", "build", "-t", "agent-harness-lab:opencode", "-f",
-         str(IMAGES / "opencode.Dockerfile"), str(IMAGES)]
-    ]
+    assert docker.builds() == [[
+        "docker", "build", "-t", "agent-harness-lab:opencode", "-f", str(IMAGES / "opencode.Dockerfile"),
+        "--build-arg", "HARNESS_VERSION=1.18.32", str(IMAGES),
+    ]]
 
 
 def test_a1_ac10_example_config_demonstrates_new_keys_and_loads(tmp_path):
@@ -321,21 +340,21 @@ def test_a1_ac10_example_config_demonstrates_new_keys_and_loads(tmp_path):
 
     lines, active = [], False
     for line in EXAMPLE.read_text().splitlines():
-        if re.match(r"# (mounts|network|env|packages):", line):
+        if re.match(r"# (harness_version|mounts|network|env|packages):", line):
             active = True
         elif not line.startswith("#   "):
             active = False
         lines.append(line[2:] if active else line)
-    text = "\n".join(lines)
-    raw = yaml.safe_load(text)
+    raw = yaml.safe_load("\n".join(lines)) | {"harness": "opencode"}
     checkout = tmp_path / "checkout"
     for entry in raw["mounts"] + raw["packages"]:
         (checkout / entry["path"]).mkdir(parents=True, exist_ok=True)
     demo = checkout / "config.yaml"
-    demo.write_text(text)
+    demo.write_text(yaml.safe_dump(raw))
 
     config = load_config(demo, keys)
 
+    assert config.harness_version == raw["harness_version"]
     assert config.mounts
     assert [m.path for m in config.mounts] == [(checkout / e["path"]).resolve() for e in raw["mounts"]]
     assert config.network == raw["network"]

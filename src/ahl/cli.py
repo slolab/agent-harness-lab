@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import urllib.request
 from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
@@ -12,7 +13,15 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 
-from ahl.config import ConfigError, RunConfig, load_config, parse_harness, read_config
+from ahl.config import (
+    HARNESS_NPM_PACKAGES,
+    ConfigError,
+    RunConfig,
+    load_config,
+    parse_harness,
+    parse_harness_version,
+    read_config,
+)
 from ahl.docker import CONTAINER_WORKSPACE, IMAGES_DIR, docker_run_args, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
 from ahl.packages import PackageCopy, wire_packages
@@ -79,7 +88,7 @@ def up(
     if run_config.network:
         _check_network(run_config.network)
     if build:
-        _build_image(run_config.harness.name)
+        _build_image(run_config.harness.name, run_config.harness_version)
     image = _image_record(run_config.harness.name)
 
     runs_root = runs_dir.expanduser().resolve() if runs_dir else run_config.root / "runs"
@@ -243,20 +252,24 @@ def build(
     if (harness is None) == (config is None):
         raise typer.BadParameter("pass exactly one of --harness or --config")
     try:
-        selected = parse_harness(harness if config is None else read_config(config).get("harness"))
+        raw = {"harness": harness} if config is None else read_config(config)
+        selected = parse_harness(raw.get("harness"))
+        pinned = parse_harness_version(raw.get("harness_version"), selected.name)
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
     _ensure_docker()
-    _build_image(selected.name)
+    _build_image(selected.name, pinned)
 
 
-def _build_image(harness: str) -> None:
+def _build_image(harness: str, pinned: str | None) -> None:
     image = image_name(harness)
     dockerfile = dockerfile_path(harness)
-    typer.echo(f"Building {image} from {dockerfile}")
+    version = pinned or _unpinned_version(harness)
+    build_args = ["--build-arg", f"HARNESS_VERSION={version}"] if version else []
+    typer.echo(f"Building {image} from {dockerfile}" + (f" with {harness} {version}" if version else ""))
     try:
         subprocess.run(
-            ["docker", "build", "-t", image, "-f", str(dockerfile), str(IMAGES_DIR)],
+            ["docker", "build", "-t", image, "-f", str(dockerfile), *build_args, str(IMAGES_DIR)],
             check=True,
             # Default provenance attestations change the image ID on every build, even a cached one.
             # Unlike --provenance=false, the variable also works with the legacy builder.
@@ -266,6 +279,26 @@ def _build_image(harness: str) -> None:
         _fail_docker_missing()
     except subprocess.CalledProcessError as exc:
         _fail_docker_command(exc)
+
+
+def _unpinned_version(harness: str) -> str | None:
+    if harness == "deepseek":
+        lock = json.loads((IMAGES_DIR / "deepseek/package-lock.json").read_text())
+        return lock["packages"]["node_modules/@deepseek-ai/dsh"]["version"]
+    if harness not in HARNESS_NPM_PACKAGES:
+        return None
+    url = f"https://registry.npmjs.org/{HARNESS_NPM_PACKAGES[harness]}/latest"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            return json.load(response)["version"]
+    except (OSError, ValueError, KeyError) as exc:
+        typer.secho(
+            f"Cannot resolve the current {harness} release from {url}: {exc}. "
+            "Set harness_version, or pass --no-build.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
 
 _DOCKER_MISSING = "Docker CLI not found on PATH. Install Docker and retry."

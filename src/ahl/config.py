@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
 
 
 SUPPORTED_HARNESSES = {"claude", "claude-science", "opencode", "agy", "gemini", "deepseek"}
+HARNESS_NPM_PACKAGES = {"claude": "@anthropic-ai/claude-code", "opencode": "opencode-ai"}
+EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?")
 
 
 def uses_account_login(harness: str, provider: str) -> bool:
@@ -60,6 +63,7 @@ class Named:
 class RunConfig:
     root: Path
     harness: Named
+    harness_version: str | None
     provider: Named
     model: Named
     workspace: "Workspace"
@@ -97,6 +101,17 @@ def parse_harness(value: Any) -> Named:
     return harness
 
 
+def parse_harness_version(value: Any, harness: str) -> str | None:
+    if value is None:
+        return None
+    if harness not in HARNESS_NPM_PACKAGES:
+        allowed = " and ".join(sorted(HARNESS_NPM_PACKAGES))
+        raise ConfigError(f"harness_version: only {allowed} accept a version, not '{harness}'")
+    if not isinstance(value, str) or not EXACT_VERSION.fullmatch(value):
+        raise ConfigError(f"harness_version: expected an exact version such as 2.1.273, got {value!r}")
+    return value
+
+
 def load_config(config_path: Path, env_file: Path | None = None) -> RunConfig:
     config_path = config_path.expanduser().resolve()
     raw = read_config(config_path)
@@ -104,6 +119,7 @@ def load_config(config_path: Path, env_file: Path | None = None) -> RunConfig:
     env_source = _load_env(root, env_file)
 
     harness = parse_harness(raw.get("harness"))
+    harness_version = parse_harness_version(raw.get("harness_version"), harness.name)
     provider = _parse_named(raw.get("provider"), "provider")
     if provider.name not in PROVIDER_KEY_ENV:
         allowed = ", ".join(sorted(PROVIDER_KEY_ENV))
@@ -156,6 +172,7 @@ def load_config(config_path: Path, env_file: Path | None = None) -> RunConfig:
     config = RunConfig(
         root=root,
         harness=harness,
+        harness_version=harness_version,
         provider=provider,
         model=model,
         workspace=parse_workspace(raw.get("workspace"), root),

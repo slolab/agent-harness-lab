@@ -13,6 +13,9 @@
 harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek
 provider: gemini      # anthropic | openai | gemini | vertex | openrouter
 model: gemini-3.5-flash
+# Claude Code and OpenCode only: install exactly this version. Without it,
+# every build installs the release current at build time.
+# harness_version: 2.1.273
 
 # --- Native web-tool permissions (run-wide, including agents) -----------
 # Claude Code and DeepSeek enforce these. OpenCode, Gemini, Antigravity,

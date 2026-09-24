@@ -1,17 +1,17 @@
 # syntax=docker/dockerfile:1
-ARG CLAUDE_CODE_VERSION=2.1.273
+ARG HARNESS_VERSION=latest
 ARG NODE_VERSION=22.20.0
-ARG UV_VERSION=0.12.18
+ARG UV_VERSION=latest
 
 FROM node:${NODE_VERSION}-bookworm-slim AS build
-ARG CLAUDE_CODE_VERSION
-RUN npm install -g --prefix /opt/claude "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+ARG HARNESS_VERSION
+RUN npm install -g --prefix /opt/claude "@anthropic-ai/claude-code@${HARNESS_VERSION}"
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
-ARG CLAUDE_CODE_VERSION
-LABEL ahl.harness=claude ahl.harness.version=${CLAUDE_CODE_VERSION}
+ARG HARNESS_VERSION
+LABEL ahl.harness=claude ahl.harness.version=${HARNESS_VERSION}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -1,17 +1,17 @@
 # syntax=docker/dockerfile:1
-ARG OPENCODE_VERSION=1.18.32
+ARG HARNESS_VERSION=latest
 ARG NODE_VERSION=22.20.0
-ARG UV_VERSION=0.12.18
+ARG UV_VERSION=latest
 
 FROM node:${NODE_VERSION}-bookworm-slim AS build
-ARG OPENCODE_VERSION
-RUN npm install -g --prefix /opt/opencode "opencode-ai@${OPENCODE_VERSION}"
+ARG HARNESS_VERSION
+RUN npm install -g --prefix /opt/opencode "opencode-ai@${HARNESS_VERSION}"
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
-ARG OPENCODE_VERSION
-LABEL ahl.harness=opencode ahl.harness.version=${OPENCODE_VERSION}
+ARG HARNESS_VERSION
+LABEL ahl.harness=opencode ahl.harness.version=${HARNESS_VERSION}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
