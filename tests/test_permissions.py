@@ -118,7 +118,6 @@ def test_deepseek_policy_reconciles_root_plugin_and_native_overrides(
 @pytest.mark.parametrize(
     "harness,provider",
     [
-        ("opencode", "anthropic"),
         ("gemini", "gemini"),
         ("agy", "gemini"),
         ("claude-science", "anthropic"),
@@ -266,7 +265,7 @@ def test_invalid_handler_results_and_io_errors_never_launch(
 
 
 @pytest.mark.parametrize(
-    "harness,provider", [("claude", "anthropic"), ("deepseek", "openrouter")]
+    "harness,provider", [("claude", "anthropic"), ("deepseek", "openrouter"), ("opencode", "anthropic")]
 )
 def test_native_handlers_report_unmapped_extensions(
     make_config, tmp_path, harness, provider
