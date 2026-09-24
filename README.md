@@ -83,6 +83,27 @@ default `<timestamp>-<harness>` id. `ahl up --resume my-run` continues that
 run in place — same workspace, same harness home/config state (sessions,
 chat history, etc.) — instead of starting a fresh `runs/<id>/`.
 
+### Native web-tool permissions
+
+Configure denials once for the run and its agents:
+
+```yaml
+permissions:
+  deny: [websearch, webfetch]
+```
+
+| Harness | Native web-tool denials |
+|---|---|
+| Claude Code (account login or OpenRouter) | Enforced through managed settings |
+| DeepSeek | Enforced by a global native tool guard |
+| OpenCode, Gemini, Antigravity, Claude Science | Warning; requested denials are not applied |
+
+Omit the block or use `deny: []` for no AHL denials. Resume installs the current
+rules, including removal of old AHL denials. `session.json` records requested,
+applied, and unsupported operations. Unknown operation names are configuration
+errors. These rules restrict native tools; shell HTTP and network access remain
+available. See [permissions and handler extensions](docs/permissions.md).
+
 ## Harnesses
 
 | harness        | auth/providers                      | launch (inside the shell) |
@@ -102,7 +123,7 @@ adapter — see `CLAUDE.md`.
 ## Observability
 
 Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
-workspace mode, timestamp). **gemini**, **opencode**, **claude**, and **deepseek** persist
+workspace mode, timestamp, permissions). **gemini**, **opencode**, **claude**, and **deepseek** persist
 their own session state under `runs/<id>/` and get a normalized `trace.json`
 on exit (sessions, messages, tool calls). Claude Science tracing is an
 explicit non-goal for its initial harness; **agy** still has no confirmed log
@@ -155,7 +176,8 @@ Use `harness: {name: deepseek, parameters: {port: 4321}}` to change the port;
 an occupied port is an error.
 
 Native search requires a separate `DEEPSEEK_API_KEY`, which this integration
-does not supply. Search stays configured and fails without that credential.
+does not supply. Search stays configured and fails without that credential
+unless `permissions.deny` disables it explicitly.
 See the [DeepSeek runbook](docs/deepseek.md) for state, resume, skills, version
 pinning, browser acceptance, and trace limitations.
 

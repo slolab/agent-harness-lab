@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ahl.permissions import UnsupportedPermissions
 from ahl.capabilities import Capability
 from ahl.config import RunConfig
 from ahl.harnesses.base import Volumes, google_env, native_skill_mount, warn_unsupported_mcp
@@ -13,6 +14,8 @@ CONTAINER_AGY_SKILLS = "/root/.gemini/antigravity-cli/skills"
 
 
 class AgyAdapter:
+    permission_handler = UnsupportedPermissions()
+
     def build_env(self, config: RunConfig) -> dict[str, str]:
         return google_env(config)
 

@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from ahl.permissions import UnsupportedPermissions
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
 from ahl.harnesses.base import Volumes, native_skill_mount, provider_key, warn_unsupported_mcp
@@ -26,6 +27,8 @@ MODEL_PROVIDER = {
 
 
 class OpenCodeAdapter:
+    permission_handler = UnsupportedPermissions()
+
     def build_env(self, config: RunConfig) -> dict[str, str]:
         provider = config.provider.name
         key = provider_key(config)

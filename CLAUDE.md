@@ -66,10 +66,21 @@ Single Python package, `src/ahl/`, exposed via the `ahl` console script (Typer a
   optional platform dependencies, and validate both Linux architectures when
   changing the lock. Native event schemas must be checked against that build.
 - AHL-owned Cordis patch rows are updated by ID while other rows survive.
-  Add future permission rows here rather than branching in shared Docker code.
+  DeepSeek permissions use a root plugin insertion owned by its permission handler.
   Native `settings.yaml` overrides composition; reconcile owned settings there
   on resume. Preserve session-specific native model selection and unrelated state.
 - DeepSeek delegated skills use installer agent `universal`, persisted at
   `/root/.agents/skills`. Mounted skills live under `/root/.dsh/skills`.
 - Keep tests at behavioral boundaries. The launcher process tests need Node.js
   and permission to bind local sockets; see `docs/deepseek.md` for live checks.
+
+## Permissions
+
+- `RunConfig.permissions` is a portable immutable deny policy. The CLI calls
+  `adapter.permission_handler.prepare()` after seeding, validates full coverage,
+  combines read-only mounts, and records the result in session metadata.
+- Native mappings belong in handlers, never in CLI/Docker conditionals. Other
+  adapters explicitly use `UnsupportedPermissions`. See `docs/permissions.md`.
+- Claude mounts run-owned managed settings read-only. DeepSeek loads the
+  image-owned global guard at host scope; native settings overrides must be
+  reconciled on resume. Removing AHL rules must preserve unrelated native state.

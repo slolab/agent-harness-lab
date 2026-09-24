@@ -11,6 +11,7 @@ from typing import Any
 
 from ahl.capabilities import Capability
 from ahl.config import RunConfig
+from ahl.permissions import PermissionPolicy, PermissionSetup
 from ahl.harnesses.base import (
     Volumes,
     native_skill_mount,
@@ -49,7 +50,27 @@ _ResponseId = tuple[str, str] | tuple[str, str, int]
 _ResponseLedger = dict[_ResponseId, _ResponseUsage]
 
 
+class ClaudePermissions:
+    def prepare(
+        self, run_dir: Path, config: RunConfig, policy: PermissionPolicy
+    ) -> PermissionSetup:
+        mapping = {"websearch": "WebSearch", "webfetch": "WebFetch"}
+        applied = policy.deny.intersection(mapping)
+        unsupported = {
+            op: "no Claude native tool mapping" for op in sorted(policy.deny - applied)
+        }
+        path = run_dir / "permissions/claude/managed-settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        settings = {"permissions": {"deny": sorted(mapping[op] for op in applied)}}
+        path.write_text(json.dumps(settings, indent=2) + "\n")
+        return PermissionSetup(
+            [(path, "/etc/claude-code/managed-settings.json")], applied, unsupported
+        )
+
+
 class ClaudeAdapter:
+    permission_handler = ClaudePermissions()
+
     def build_env(self, config: RunConfig) -> dict[str, str]:
         if config.provider.name == "openrouter":
             return {

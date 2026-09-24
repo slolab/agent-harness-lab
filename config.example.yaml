@@ -9,6 +9,14 @@ harness: gemini       # gemini | opencode | agy | claude | claude-science | deep
 provider: gemini      # anthropic | openai | gemini | vertex | openrouter
 model: gemini-3.5-flash
 
+# --- Native web-tool permissions (run-wide, including agents) -----------
+# Claude Code and DeepSeek enforce these. OpenCode, Gemini, Antigravity,
+# and Claude Science warn and continue with these denials unapplied.
+# Omit this block or use deny: [] for no AHL denials. Resume replaces old rules.
+# Only websearch and webfetch are valid; shell HTTP/network access is unchanged.
+# permissions:
+#   deny: [websearch, webfetch]
+
 # --- Workspace ---------------------------------------------------------
 # AHL is for isolated, repeatable testing of skills/MCP servers, not for
 # driving a persistent real project — so `workspace` is a *template*, by

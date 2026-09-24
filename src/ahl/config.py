@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from ahl.permissions import PermissionPolicy, parse_permissions
+
 if TYPE_CHECKING:
     from ahl.capabilities import Capability
     from ahl.packages import Package
@@ -62,6 +64,7 @@ class RunConfig:
     workspace: "Workspace"
     capabilities: list["Capability"]
     packages: list["Package"]
+    permissions: PermissionPolicy = PermissionPolicy()
 
     @property
     def key_env(self) -> str:
@@ -138,6 +141,7 @@ def load_config(config_path: Path) -> RunConfig:
         workspace=workspace,
         capabilities=capabilities,
         packages=packages,
+        permissions=parse_permissions(raw.get("permissions", {})),
     )
 
 

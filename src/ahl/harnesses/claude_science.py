@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from ahl.permissions import UnsupportedPermissions
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
 from ahl.harnesses.base import Volumes, warn_unsupported_mcp
@@ -15,6 +16,8 @@ DEFAULT_PORT = 8000
 
 
 class ClaudeScienceAdapter:
+    permission_handler = UnsupportedPermissions()
+
     def build_env(self, config: RunConfig) -> dict[str, str]:
         # Claude Science authenticates in its web UI with a Claude account.
         return {"DO_NOT_TRACK": "1"}

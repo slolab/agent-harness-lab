@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ahl.permissions import UnsupportedPermissions
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
 from ahl.harnesses.base import Volumes, google_env, native_skill_mount, warn_unsupported_mcp
@@ -22,6 +23,8 @@ AUTH_TYPE = {
 
 
 class GeminiAdapter:
+    permission_handler = UnsupportedPermissions()
+
     def build_env(self, config: RunConfig) -> dict[str, str]:
         return google_env(config)
 

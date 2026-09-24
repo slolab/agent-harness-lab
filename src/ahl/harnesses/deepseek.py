@@ -11,6 +11,7 @@ import yaml
 
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
+from ahl.permissions import PermissionPolicy, PermissionSetup
 from ahl.harnesses.base import (
     Volumes,
     native_skill_mount,
@@ -28,7 +29,60 @@ USAGE_FIELDS = {
 }
 
 
+class DeepSeekPermissions:
+    def prepare(
+        self, run_dir: Path, config: RunConfig, policy: PermissionPolicy
+    ) -> PermissionSetup:
+        home = run_dir / "deepseek/home"
+        patch_path, settings_path = home / "cordis.patch.yml", home / "settings.yaml"
+        rows = _read_yaml(patch_path, list)
+        settings = _read_yaml(settings_path, dict)
+        plugin_id = "ahl-native-permissions"
+        mapping = {"websearch": "web_search", "webfetch": "web_fetch"}
+        applied = policy.deny.intersection(mapping)
+        unsupported = {
+            op: "no DeepSeek native tool mapping"
+            for op in sorted(policy.deny - applied)
+        }
+        native = {"deny": sorted(mapping[op] for op in applied)}
+        # Remove only our insertion, preserving siblings and unrelated patch rows.
+        reconciled = []
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("insert"), list):
+                remaining = [
+                    p
+                    for p in row["insert"]
+                    if not (isinstance(p, dict) and p.get("id") == plugin_id)
+                ]
+                if len(remaining) != len(row["insert"]):
+                    row = {**row, "insert": remaining}
+                    if not remaining and set(row) == {"insert"}:
+                        continue
+            reconciled.append(row)
+        reconciled.append(
+            {
+                "insert": [
+                    {
+                        "id": plugin_id,
+                        "name": "/opt/ahl/permissions/deepseek.mjs",
+                        "config": native,
+                    }
+                ]
+            }
+        )
+        # Native settings override patch config. Reapply owned values on resume.
+        if plugin_id in settings:
+            settings[plugin_id] = _merge_owned(settings[plugin_id], native)
+        home.mkdir(parents=True, exist_ok=True)
+        patch_path.write_text(yaml.safe_dump(reconciled, sort_keys=False))
+        if settings_path.exists():
+            settings_path.write_text(yaml.safe_dump(settings, sort_keys=False))
+        return PermissionSetup([], applied, unsupported)
+
+
 class DeepSeekAdapter:
+    permission_handler = DeepSeekPermissions()
+
     def build_env(self, config: RunConfig) -> dict[str, str]:
         return {"DSH_HOME": HOME, "OPENROUTER_API_KEY": provider_key(config)}
 
@@ -93,7 +147,11 @@ class DeepSeekAdapter:
     def start_hints(self, run_dir: Path, config: RunConfig) -> list[str]:
         return [
             "Open DSH's printed authenticated URL in your browser; host access is loopback-only",
-            "Native DeepSeek search requires DEEPSEEK_API_KEY, which AHL does not supply; search will fail without it",
+            (
+                "Native DeepSeek search is disabled by AHL permissions"
+                if "websearch" in config.permissions.deny
+                else "Native DeepSeek search requires DEEPSEEK_API_KEY, which AHL does not supply; search will fail without it"
+            ),
             "On resume, select your saved session in the browser; state and skills are retained",
         ]
 

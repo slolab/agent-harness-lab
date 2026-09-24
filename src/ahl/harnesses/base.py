@@ -16,9 +16,12 @@ from typing import Any, Protocol
 from ahl.capabilities import Capability
 from ahl.config import PROVIDER_KEY_ENV, RunConfig
 from ahl.docker import Volumes
+from ahl.permissions import PermissionHandler
 
 
 class HarnessAdapter(Protocol):
+    permission_handler: PermissionHandler
+
     def build_env(self, config: RunConfig) -> dict[str, str]: ...
     def seed(self, run_dir: Path, config: RunConfig) -> Volumes: ...
     def wire_capabilities(self, run_dir: Path, config: RunConfig, capabilities: list[Capability]) -> Volumes: ...

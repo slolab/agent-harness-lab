@@ -24,7 +24,9 @@ redirects to the clean URL. Choose `/workspace` and start a Standard session.
 The model ID is used exactly as configured. The native model picker may also
 show DeepSeek's shipped models; this AHL release only authenticates OpenRouter.
 Native search remains installed but requires `DEEPSEEK_API_KEY`, which AHL does
-not inject. Invoking it without that credential fails. No alternate search
+not inject. Invoking it without that credential fails unless AHL denies it first.
+Set `permissions: {deny: [websearch, webfetch]}` to restrict native web tools
+across presets and child agents; see [permissions](permissions.md). No alternate search
 backend or network restrictions are added.
 
 ### Ports and shutdown

@@ -18,6 +18,7 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 ENV PATH="/root/.local/bin:${PATH}"
 COPY --from=build /opt/deepseek /opt/deepseek
 COPY deepseek/ahl-deepseek.cjs /usr/local/bin/ahl-deepseek
+COPY permissions/deepseek.mjs /opt/ahl/permissions/deepseek.mjs
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN ln -s /opt/deepseek/node_modules/.bin/dsh /usr/local/bin/dsh \
     && chmod +x /usr/local/bin/ahl-deepseek /usr/local/bin/init-firewall.sh \

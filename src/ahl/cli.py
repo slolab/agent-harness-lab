@@ -15,6 +15,7 @@ from ahl.config import ConfigError, RunConfig, load_config
 from ahl.docker import CONTAINER_WORKSPACE, docker_run_args, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
 from ahl.packages import PackageCopy, wire_packages
+from ahl.permissions import PermissionSetup, validate_setup
 from ahl.skills import wire_delegated_skills
 from ahl.workspace import resolve_workspace
 
@@ -97,6 +98,15 @@ def up(
 
     try:
         extra_volumes = adapter.seed(run_dir, run_config)
+        permissions = adapter.permission_handler.prepare(
+            run_dir, run_config, run_config.permissions
+        )
+        validate_setup(run_config.permissions, permissions)
+        if permissions.unsupported:
+            detail = "; ".join(
+                f"{op}: {reason}" for op, reason in sorted(permissions.unsupported.items())
+            )
+            typer.echo(f"[ahl] warning: permissions not applied: {detail}", err=True)
         readonly_volumes = adapter.wire_capabilities(run_dir, run_config, run_config.capabilities)
         skill_volumes, skill_commands = wire_delegated_skills(
             run_config.harness.name,
@@ -106,6 +116,7 @@ def up(
             run_dir,
             run_config.packages,
         )
+        readonly_volumes += permissions.readonly_volumes
         readonly_volumes += skill_volumes
         readonly_volumes += package_volumes
         setup_commands = skill_commands + package_commands
@@ -126,7 +137,7 @@ def up(
         extra_args=adapter.docker_args(run_config),
     )
 
-    _write_session(run_dir, run_config, run_id, workspace_dir, resumed=bool(resume))
+    _write_session(run_dir, run_config, run_id, workspace_dir, permissions, resumed=bool(resume))
     typer.echo(f"AHL session: {run_id}")
     typer.echo(f"Provider: {run_config.provider.name} | Model: {run_config.model.name or '(harness default)'}")
     if run_config.workspace.install == "copy":
@@ -318,7 +329,15 @@ def _check_resumable(run_dir: Path, config: RunConfig) -> None:
         )
 
 
-def _write_session(run_dir: Path, config: RunConfig, run_id: str, workspace_dir: Path, *, resumed: bool) -> None:
+def _write_session(
+    run_dir: Path,
+    config: RunConfig,
+    run_id: str,
+    workspace_dir: Path,
+    permissions: PermissionSetup,
+    *,
+    resumed: bool,
+) -> None:
     session_path = run_dir / "session.json"
     now = datetime.now(timezone.utc).isoformat()
 
@@ -334,6 +353,11 @@ def _write_session(run_dir: Path, config: RunConfig, run_id: str, workspace_dir:
         resumed_at.append(now)
 
     record: dict[str, Any] = {
+        "permissions": {
+            "deny": sorted(config.permissions.deny),
+            "applied": sorted(permissions.applied),
+            "unsupported": dict(sorted(permissions.unsupported.items())),
+        },
         "run_id": run_id,
         "started_at": started_at,
         "harness": config.harness.name,
