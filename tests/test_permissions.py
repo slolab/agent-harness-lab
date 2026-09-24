@@ -121,8 +121,14 @@ def docker_stub(monkeypatch, tmp_path):
     (tmp_path / "workspace").mkdir()
     calls = []
     monkeypatch.setattr(cli, "_ensure_docker", lambda: None)
+    real_run = subprocess.run
 
     def run(args, **kwargs):
+        if args[0] == "git":
+            return real_run(args, **kwargs)
+        if args[:3] == ["docker", "image", "inspect"]:
+            image = {"Id": "sha256:" + "0" * 64, "Config": {"Labels": {"ahl.harness": args[3].split(":")[1]}}}
+            return subprocess.CompletedProcess(args, 0, json.dumps([image]), "")
         calls.append(args)
         return subprocess.CompletedProcess(args, 0)
 
