@@ -113,6 +113,10 @@ Every terminal state except exit 2 leaves:
   file and SHA-256, timings, exit code, status, reason, session id and
   `key_usage`. `totals` sums wall clock, key cost and the token fields of the
   trace's `usage` events; `warnings` lists `{code, turn, message}`.
+- If the harness's native state cannot be parsed, for example an OpenCode
+  database killed before its tables exist, `trace.json` is missing,
+  `trace.jsonl` is empty, the token totals are null and `warnings` has
+  `trace_unreadable`. The status and exit code are unaffected.
 - `key_usage` (OpenRouter only, otherwise null) reads `GET /api/v1/key` before
   and after each started turn. After a turn AHL polls every 10 s for up to
   120 s until the usage has risen and two readings agree (`settled: true`).

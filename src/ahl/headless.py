@@ -16,12 +16,13 @@ from ahl import keyusage
 from ahl.docker import CONTAINER_WORKSPACE, docker_daemon_unreachable
 from ahl.harnesses.base import TurnReport, provider_key
 from ahl.runs import PreparedRun, start_container, write_native_trace
-from ahl.trace import token_totals, write_trace
+from ahl.trace import TOKEN_FIELDS, token_totals, write_trace
 
 EXIT_CODES = {"completed": 0, "failed": 1, "error": 3, "timeout": 124, "interrupted": 130}
 WARNINGS = {
     "usage_not_updated": "OpenRouter key usage did not rise after the turn",
     "usage_read_failed": "OpenRouter key usage could not be read",
+    "trace_unreadable": "the native trace could not be parsed",
 }
 
 
@@ -63,8 +64,7 @@ class _HeadlessRun:
         if started:
             self._teardown()
         status, reason = self._settle_statuses(failure)
-        write_native_trace(self.run)
-        events = write_trace(self.run.dir, self.driver.trace(self.run.dir), self.turns)
+        events = self._write_traces()
         (self.run.dir / "result.json").write_text(json.dumps(self._result(status, reason, events), indent=2))
         code = f" ({reason['code']})" if reason else ""
         typer.echo(f"Result: {status}{code} -> {self.run.dir / 'result.json'}")
@@ -197,7 +197,21 @@ class _HeadlessRun:
             return stopped["status"], stopped["reason"]
         return "completed", None
 
-    def _result(self, status: str, reason: dict[str, str] | None, events: list[dict[str, Any]]) -> dict[str, Any]:
+    def _write_traces(self) -> list[dict[str, Any]] | None:
+        # A parser that fails on partial native state must not cost the caller result.json.
+        try:
+            write_native_trace(self.run)
+            return write_trace(self.run.dir, self.driver.trace(self.run.dir), self.turns)
+        except Exception as exc:
+            message = f"{WARNINGS['trace_unreadable']}: {exc}"
+            typer.echo(f"[ahl] warning: {message}", err=True)
+            self.warnings.append({"code": "trace_unreadable", "turn": None, "message": message})
+            write_trace(self.run.dir, [], self.turns)
+            return None
+
+    def _result(
+        self, status: str, reason: dict[str, str] | None, events: list[dict[str, Any]] | None
+    ) -> dict[str, Any]:
         config = self.run.config
         started = [turn for turn in self.turns if turn["started_at"]]
         deltas = [(turn["key_usage"] or {}).get("delta_usd") for turn in started]
@@ -214,7 +228,7 @@ class _HeadlessRun:
             "totals": {
                 "wall_clock_seconds": round(sum(turn["wall_clock_seconds"] or 0 for turn in started), 3),
                 "cost_usd_key_delta": round(sum(deltas), 10) if self.key and None not in deltas else None,
-                **token_totals(events),
+                **(token_totals(events) if events is not None else dict.fromkeys(TOKEN_FIELDS)),
             },
             "warnings": self.warnings,
         }

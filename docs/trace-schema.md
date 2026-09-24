@@ -62,7 +62,9 @@ events, subagents included.
 | `cost_usd` | number or null | Cost as the harness reports it. |
 
 `result.json` sums each token field over the `usage` events. A total is null
-if any event has null there, and 0 without `usage` events. Cost for billing
+if any event has null there, and 0 without `usage` events. If the native state
+cannot be parsed, `trace.jsonl` is empty, every token total is null and
+`result.json` has the warning `trace_unreadable`. Cost for billing
 comes from the OpenRouter key (`totals.cost_usd_key_delta`), not from
 `cost_usd`.
 
