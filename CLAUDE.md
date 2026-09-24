@@ -98,6 +98,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 | Orchestrator (main Claude session) | Writes specs, dispatches subagents, watches PRs, updates the tracking issue |
 | Implementer (subagent) | Builds one milestone in its own worktree and opens a draft PR |
 | Review agent (subagent, fresh context) | Reviews the PR against its spec and posts inline comments |
+| Architect (subagent, fresh context) | Reviews the PR's code and tests for design quality, bloat and test quality, and posts inline comments |
 | Finalizer (subagent) | Answers the review, gets CI green, completes the PR description, marks the PR ready |
 | Fix agent (subagent) | Addresses later review comments, one round at a time |
 | Vlad | Reviews specs before implementation, reviews PRs last, merges |
@@ -106,7 +107,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 1. The orchestrator writes the spec in a PR. Vlad reviews and merges it.
 2. An implementer builds the milestone and opens a draft PR.
-3. One review agent reviews the PR. There is one review-agent pass per PR.
+3. One review agent and one architect review the PR in parallel. Every implementation PR gets at least one architect pass; after a large fix round the orchestrator may ask for another.
 4. The finalizer answers every review thread, gets CI green and marks the PR ready.
 5. The orchestrator watches the PR for comments from Vlad and from agents Vlad dispatches, and dispatches fix agents until every comment is addressed.
 6. Vlad merges.
@@ -124,17 +125,24 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 - Every milestone has a spec in `docs/specs/<id>-<slug>.md`. Vlad approves it by merging it to `main`, and from then on it is frozen.
 - Implement the spec as written. **Never weaken, drop or reinterpret an acceptance criterion to make progress.**
-- The implementer never edits a spec. If a criterion is wrong, impossible or far harder than expected, post a PR comment starting `🤖 implementer: BLOCKED on AC-n` with the evidence and the options you see, and stop work on that criterion.
+- The binding parts of a spec are its goal, scope, non-goals, interfaces and acceptance criteria. Its design sketch is guidance only: depart from it when the code shows a better way, and say why in the PR. That needs no spec change.
+- The implementer never edits a spec. If a criterion is wrong, impossible or far harder than expected, post a PR comment starting with your role tag and `BLOCKED on AC-n`, for example `🤖 claude-implementer: BLOCKED on AC-3`, with the evidence and the options you see, and stop work on that criterion.
 - The orchestrator takes the question to Vlad. Only after Vlad approves a change in a PR comment does the orchestrator commit it, in its own commit prefixed `spec-change:`, with the reason and the URL of Vlad's approving comment in the commit message.
 - Findings outside the spec become new GitHub issues, not extra scope.
 
 ### Tests first
 
-- Write the test for an acceptance criterion before the code that satisfies it. Name it after the criterion, for example `test_a1_ac3_runs_dir_override`.
+- Work test-first. Write the tests for the desired behaviour before the code, with mocks or stubs at the boundaries (subprocess, Docker, HTTP) so they run before the implementation exists. See them fail, then implement.
+- Test behaviour through public interfaces, not internals. Prefer a few scenario tests that exercise an outcome end to end over many small tests of its parts. One scenario may cover several acceptance criteria. The PR description maps each criterion to the tests that cover it.
+- No test bloat:
+  - no phantom tests, which cannot fail or cannot pass;
+  - no tests of trivial code, or of the language or a library;
+  - no tests that repeat what another test already covers, including sweeps over trivial parameter variations;
+  - no tests split into fragments that one integrated test would cover.
 - Three tiers, selected by pytest markers:
   - **unit:** the default, runs in CI.
   - **`@pytest.mark.docker`:** needs Docker, runs locally.
-  - **`@pytest.mark.live`:** spends OpenRouter credit, runs locally only, never in CI.
+  - **`@pytest.mark.live`:** spends OpenRouter credit, runs locally only, never in CI. A test that spends credit carries only `live`, even when it also needs Docker, because `-m docker` selects any test marked `docker`.
 - The pytest config keeps the docker and live tiers out of the default run: `addopts = "--strict-markers -m 'not docker and not live'"`, with both markers registered. `uv run pytest` runs the unit tier, and `-m docker` or `-m live` runs the others. A marked test run by node id still needs its marker, for example `uv run pytest -m live tests/test_x.py::test_a1_ac5`. AHL has it in `pyproject.toml`.
 - Never make a test pass by weakening it: no new `skip` or `xfail`, no removed assertions, no loosened tolerances, no mocking of the code under test, no expected values hard-coded into production code.
 - A wrong test needs Vlad's agreement before it changes. Say so in the PR and wait for his approval in a PR comment.
@@ -143,7 +151,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 ### Reviews and comments
 
-- Every comment an agent posts on GitHub starts with its role tag: `🤖 orchestrator:`, `🤖 implementer:`, `🤖 review-agent:`, `🤖 finalizer:` or `🤖 fix-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
+- Every comment an agent posts on GitHub starts with its role tag, prefixed by its agent family. The Claude orchestrator tags itself `🤖 claude-agent:`, and its subagents use `🤖 claude-implementer:`, `🤖 claude-review-agent:`, `🤖 claude-architect:`, `🤖 claude-finalizer:` or `🤖 claude-fix-agent:`. Codex agents follow the same pattern: `🤖 codex-agent:`, `🤖 codex-review-agent:` and so on. An agent with no family convention uses the bare role, for example `🤖 review-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
 - Reply to every review thread with the fixing commit's SHA, or with the reason for not changing anything.
 - The agent that fixes an agent-opened thread resolves it. Threads answered without a change stay open for Vlad, and threads Vlad opened stay open until Vlad resolves them.
 - Review agents check, for every PR:
@@ -152,6 +160,17 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
   - no test was weakened (see above);
   - the evidence holds up: re-run the unit and Docker tiers locally, and check the pasted live output and cost against any run records the PR commits (in bench, `results/`). Do not re-run the live tier;
   - the code is correct and readable.
+- Architects check, for every implementation PR:
+  - **design:**
+    - modular, maintainable structure;
+    - extensible where the roadmap needs it;
+    - no duplicated code;
+    - no unneeded abstractions, layers, options or files;
+    - efficient code. Shorter is better while it stays clear: 100 lines that one line could replace are a finding;
+  - **comments:** the zero-comment policy (see Style) holds, and comment and docstring bloat is removed;
+  - **tests:** the tests were designed first and there is no test bloat (see Tests first). The architect reads every test the PR adds or changes, and flags:
+    - phantom, trivial, redundant and over-granular tests;
+    - tests that pass around a wrong implementation, for example by mocking the code under test, or by asserting what the code happens to do instead of what the spec requires.
 
 ### Definition of done
 
@@ -169,4 +188,8 @@ End every working session on a PR with a comment covering what is done, what is 
 ## Style
 
 - Python 3.11+, formatted and linted with ruff. Match the surrounding code.
+- **Zero-comment policy.** Code explains itself through names and structure. A comment is allowed only for a non-obvious trick or decision, and says why, not what. This means:
+  - no docstrings that restate the name or signature;
+  - no commented-out code, section banners or change notes.
+  Apply it to all code you write or touch.
 - Documents use plain, compact prose: short sentences, concrete statements, no rhetorical emphasis or repeated conclusions.
