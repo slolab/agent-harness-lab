@@ -137,6 +137,7 @@ def up(
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    image = _image_record(run_config.harness.name)
     use_copy_flow = bool(package_copies)
     args = docker_run_args(
         run_config,
@@ -149,9 +150,9 @@ def up(
         detached=use_copy_flow,
         hold=use_copy_flow,
         extra_args=adapter.docker_args(run_config),
+        image=image["id"],
     )
 
-    image = _image_record(run_config.harness.name)
     _write_session(
         run_dir, run_config, run_id, workspace_dir, permissions, image, resumed=bool(resume)
     )

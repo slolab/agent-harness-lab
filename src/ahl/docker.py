@@ -44,6 +44,7 @@ def docker_run_args(
     detached: bool = False,
     hold: bool = False,
     extra_args: list[str] | None = None,
+    image: str | None = None,
 ) -> list[str]:
     """Assemble the `docker run` invocation.
 
@@ -94,7 +95,7 @@ def docker_run_args(
         args.extend(["-v", f"{host}:{container}:ro"])
     for key, value in {**GIT_IDENTITY_ENV, **config.env, **env}.items():
         args.extend(["-e", f"{key}={value}"])
-    args.append(image_name(config.harness.name))
+    args.append(image or image_name(config.harness.name))
     if hold or detached:
         args.extend([INIT_SCRIPT, "sleep", "infinity"])
     elif setup_commands:

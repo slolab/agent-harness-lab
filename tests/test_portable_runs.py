@@ -214,6 +214,7 @@ def test_a1_ac3_build_reads_only_harness_and_uses_package_images(tmp_path, monke
 def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, docker):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     config = write_config(tmp_path / "config.yaml", **OPENROUTER)
+    (tmp_path / "lib").mkdir()
     head = subprocess.run(
         ["git", "-C", str(PACKAGE_DIR), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -236,16 +237,19 @@ def test_a1_ac5_session_records_ahl_and_image_provenance(tmp_path, monkeypatch, 
         "id": docker.image_id,
         "harness_version": "1.18.32",
     }
-    assert session["image"]["name"] in launches(docker)[-1]
+    assert docker.image_id in launches(docker)[-1] and session["image"]["name"] not in launches(docker)[-1]
     assert session["harness"] == "opencode" and session["run_id"] == "built"
 
+    write_config(config, **OPENROUTER, packages=[{"name": "lib", "install": "copy", "path": "./lib"}])
+    docker.image_id = "sha256:" + "cd" * 32
     docker.labels = {"ahl.harness": "opencode"}
     docker.git = False
     unlabelled = ahl_cli("up", "-c", config, "--no-build", "--name", "unlabelled")
 
     assert unlabelled.exit_code == 0, unlabelled.output
+    assert launches(docker)[-1][:4] == ["docker", "run", "--rm", "-d"] and docker.image_id in launches(docker)[-1]
     session = json.loads((tmp_path / "runs/unlabelled/session.json").read_text())
-    assert session["image"]["harness_version"] is None
+    assert session["image"] == {"name": "agent-harness-lab:opencode", "id": docker.image_id, "harness_version": None}
     assert session["ahl"]["git_sha"] is None and session["ahl"]["git_dirty"] is None
 
 
