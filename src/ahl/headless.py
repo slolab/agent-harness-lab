@@ -92,8 +92,7 @@ class _HeadlessRun:
         self.warnings: list[dict[str, Any]] = []
 
     def execute(self) -> int:
-        interrupted = self.interrupts.count > 0
-        if self.failure is None and not interrupted:
+        if self.failure is None and not self.interrupts.count:
             try:
                 with self.interrupts.interruptible():
                     self.failure = self._start()
@@ -101,13 +100,13 @@ class _HeadlessRun:
                     session_id = None
                     for turn in self.turns:
                         session_id = self._turn(turn, session_id) or session_id
-                        if turn["status"] != "completed":
+                        if turn["status"] != "completed" or self.interrupts.count:
                             break
             except KeyboardInterrupt:
-                interrupted = True
+                pass
             self._teardown()
-        status, reason = self._settle_statuses(interrupted)
         events = self._write_traces()
+        status, reason = self._settle_statuses()
         (self.run.dir / "result.json").write_text(json.dumps(self._result(status, reason, events), indent=2))
         code = f" ({reason['code']})" if reason else ""
         typer.echo(f"Result: {status}{code} -> {self.run.dir / 'result.json'}")
@@ -150,7 +149,6 @@ class _HeadlessRun:
         ]
         started, exit_code, outcome = datetime.now(timezone.utc), None, None
         turn["started_at"] = started.isoformat()
-        interrupted = TurnOutcome("interrupted", "interrupted", f"turn {index} was interrupted")
         try:
             with (
                 (directory / "prompt.md").open("rb") as stdin,
@@ -164,7 +162,7 @@ class _HeadlessRun:
         except subprocess.TimeoutExpired:
             outcome = TurnOutcome("timeout", "timeout", f"turn {index} exceeded --timeout {self.timeout:g} seconds")
         except KeyboardInterrupt:
-            outcome = interrupted
+            outcome = TurnOutcome("interrupted", "interrupted", f"turn {index} was interrupted")
         ended = datetime.now(timezone.utc)
         if outcome is not None:
             self._in_container("kill -KILL -1")
@@ -173,8 +171,6 @@ class _HeadlessRun:
             outcome = self._classify(exit_code, report, (directory / "stderr.log").read_text(errors="replace"))
         if self.key:
             measured = keyusage.after_turn(self.key, before, self.interrupts.interruptible)
-            if measured.interrupted and outcome.status != "timeout":
-                outcome = interrupted
             turn["key_usage"] = measured.key_usage
             if measured.warning:
                 self.warnings.append({"code": measured.warning, "turn": index, "message": WARNINGS[measured.warning]})
@@ -229,12 +225,13 @@ class _HeadlessRun:
             )
         _docker("rm", "-f", self.run.container)
 
-    def _settle_statuses(self, interrupted: bool) -> tuple[str, dict[str, str] | None]:
+    def _settle_statuses(self) -> tuple[str, dict[str, str] | None]:
+        if self.interrupts.count:
+            last = next((turn for turn in self.turns if turn["status"] != "completed"), self.turns[-1])
+            if last["status"] != "timeout":
+                message = f"turn {last['index']} was interrupted"
+                last.update(status="interrupted", reason={"code": "interrupted", "message": message})
         pending = [turn for turn in self.turns if turn["status"] is None]
-        if interrupted and pending:
-            first = pending.pop(0)
-            message = f"turn {first['index']} was interrupted"
-            first.update(status="interrupted", reason={"code": "interrupted", "message": message})
         stopped = next((turn for turn in self.turns if turn["status"] not in (None, "completed")), None)
         cause = f"turn {stopped['index']} {stopped['status']}" if stopped else "the run failed before turn 1"
         for turn in pending:

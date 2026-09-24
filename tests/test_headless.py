@@ -150,6 +150,8 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
          ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
         ("interrupted-wait", [Turn(stdout=ok), Turn(stdout=ok), Turn(stdout=ok, interrupt_wait=True)], {}, 130,
          ["completed", "completed", "interrupted"], ("interrupted", "interrupted")),
+        ("interrupted-cleanup", [Turn(stdout=ok)] * 3, {"sigints": ["chown"]}, 130,
+         ["completed", "completed", "interrupted"], ("interrupted", "interrupted")),
         ("infra", [], {"failing": {"build": 1}}, 3, ["skipped"] * 3, ("error", "infra")),
         ("interrupted-build", [], {"sigints": ["docker build"]}, 130,
          ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),

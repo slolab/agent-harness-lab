@@ -99,11 +99,11 @@ such as HTTP 429 or 5xx (best effort). Skipped turns have
 `skipped_after_failure`.
 
 Ctrl-C (SIGINT) interrupts the image build, the container start, a turn and
-the key-usage wait after a turn. The turn then ends as `interrupted` unless it
-timed out, and a Ctrl-C before turn 1 starts marks turn 1 `interrupted`.
-Stopping the harness, recording the turn, handing files to the caller,
-removing the container and writing the run directory always finish; a Ctrl-C
-during them only ends a following usage wait early.
+the key-usage wait after a turn, and no further turn starts. Stopping the
+harness, recording the turn, handing files to the caller, removing the
+container and writing the run directory always finish. After any Ctrl-C, the
+first turn that did not complete, or the last turn if all did, ends as
+`interrupted` unless it timed out.
 
 Every terminal state except exit 2 leaves:
 

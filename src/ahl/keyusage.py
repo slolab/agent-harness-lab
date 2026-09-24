@@ -5,7 +5,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from typing import Any, NamedTuple
 
 KEY_URL = "https://openrouter.ai/api/v1/key"
@@ -16,7 +16,6 @@ WAIT_SECONDS = 120
 class AfterTurn(NamedTuple):
     key_usage: dict[str, Any]
     warning: str | None
-    interrupted: bool
 
 
 def read(key: str) -> dict[str, Any] | None:
@@ -36,14 +35,10 @@ def after_turn(
 ) -> AfterTurn:
     readings = [read(key)]
     deadline = time.monotonic() + WAIT_SECONDS
-    interrupted = False
-    try:
-        with interruptible():
-            while before and readings[-1] and not _settled(before, readings) and time.monotonic() < deadline:
-                time.sleep(POLL_SECONDS)
-                readings.append(read(key))
-    except KeyboardInterrupt:
-        interrupted = True
+    with suppress(KeyboardInterrupt), interruptible():
+        while before and readings[-1] and not _settled(before, readings) and time.monotonic() < deadline:
+            time.sleep(POLL_SECONDS)
+            readings.append(read(key))
     last = next((reading for reading in reversed(readings) if reading), None)
     failed = before is None or None in readings
     risen = before is not None and last is not None and last["usd"] > before["usd"]
@@ -54,7 +49,7 @@ def after_turn(
     elif not risen:
         warning = "usage_not_updated"
     after = {**last, "settled": _settled(before, readings)} if last else None
-    return AfterTurn({"before": before, "after": after, "delta_usd": delta}, warning, interrupted)
+    return AfterTurn({"before": before, "after": after, "delta_usd": delta}, warning)
 
 
 def _settled(before: dict[str, Any] | None, readings: list[dict[str, Any] | None]) -> bool:
