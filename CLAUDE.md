@@ -156,6 +156,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 ### Reviews and comments
 
 - Every comment an agent posts on GitHub starts with its role tag, prefixed by its agent family. The Claude orchestrator tags itself `🤖 claude-agent:`, and its subagents use `🤖 claude-implementer:`, `🤖 claude-review-agent:`, `🤖 claude-architect:`, `🤖 claude-finalizer:` or `🤖 claude-fix-agent:`. Codex agents follow the same pattern: `🤖 codex-agent:`, `🤖 codex-review-agent:` and so on. An agent with no family convention uses the bare role, for example `🤖 review-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
+- Keep PR comments and descriptions concise and to the point: findings, decisions, evidence and SHAs. No praise, no summaries of what went well, no filler.
 - Reply to every review thread with the fixing commit's SHA, or with the reason for not changing anything.
 - The agent that fixes an agent-opened thread resolves it. Threads answered without a change stay open for Vlad, and threads Vlad opened stay open until Vlad resolves them.
 - Review agents check, for every PR:
