@@ -145,7 +145,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
   - **`@pytest.mark.live`:** spends OpenRouter credit, runs locally only, never in CI. A test that spends credit carries only `live`, even when it also needs Docker, because `-m docker` selects any test marked `docker`.
 - The pytest config keeps the docker and live tiers out of the default run: `addopts = "--strict-markers -m 'not docker and not live'"`, with both markers registered. `uv run pytest` runs the unit tier, and `-m docker` or `-m live` runs the others. A marked test run by node id still needs its marker, for example `uv run pytest -m live tests/test_x.py::test_a1_ac5`. AHL has it in `pyproject.toml`.
 - Never make a test pass by weakening it: no new `skip` or `xfail`, no removed assertions, no loosened tolerances, no mocking of the code under test, no expected values hard-coded into production code.
-- A wrong test needs Vlad's agreement before it changes. Say so in the PR and wait for his approval in a PR comment.
+- Merging or deleting redundant, trivial or phantom tests needs no approval, as long as every behaviour stays covered. A wrong test needs Vlad's agreement before it changes. Say so in the PR and wait for his approval in a PR comment.
 - A bug fix starts with a failing test that reproduces it.
 - Live and Docker evidence goes in the PR description: the command, abridged output and, for live runs, the OpenRouter cost.
 
