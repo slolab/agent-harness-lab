@@ -31,13 +31,28 @@ def project(tmp_path: Path, opencode_image) -> Path:
     return tmp_path
 
 
-def stub_run(project: Path, turn: str, *flags: str) -> subprocess.Popen:
-    return subprocess.Popen(
+@pytest.fixture
+def leftovers():
+    processes: list[subprocess.Popen] = []
+    containers: list[str] = []
+    yield processes, containers
+    for process in processes:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    for name in containers:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
+def stub_run(processes: list[subprocess.Popen], project: Path, turn: str, *flags: str) -> subprocess.Popen:
+    process = subprocess.Popen(
         [sys.executable, str(STUB), "run", "-c", "config.yaml", "--turn", "prompt.md",
          "--env-file", "keys.env", "--no-build", *flags],
         cwd=project, env={**os.environ, "AHL_STUB_TURN": turn}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True,
     )
+    processes.append(process)
+    return process
 
 
 def finished(process: subprocess.Popen) -> tuple[int, str]:
@@ -52,8 +67,9 @@ def container_state(name: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def test_a2_ac3_timeout_and_killed_runs_leave_no_blocking_container(project):
-    code, output = finished(stub_run(project, "sleep 60", "--name", "slow", "--timeout", "5"))
+def test_a2_ac3_timeout_and_killed_runs_leave_no_blocking_container(project, leftovers):
+    processes, containers = leftovers
+    code, output = finished(stub_run(processes, project, "sleep 60", "--name", "slow", "--timeout", "5"))
 
     assert code == 124, output
     run = project / "runs/slow"
@@ -62,31 +78,32 @@ def test_a2_ac3_timeout_and_killed_runs_leave_no_blocking_container(project):
     assert [(t["status"], t["reason"]["code"]) for t in outcome["turns"]] == [("timeout", "timeout")]
     assert container_state(json.loads((run / "session.json").read_text())["container"]) is None
 
-    killed = stub_run(project, "sleep 300", "--runs-dir", "first", "--name", "r")
+    killed = stub_run(processes, project, "sleep 300", "--runs-dir", "first", "--name", "r")
     session, deadline = project / "first/r/session.json", time.monotonic() + 180
     while not (session.is_file() and (project / "first/r/turns/1/stdout.jsonl").is_file()):
         assert killed.poll() is None and time.monotonic() < deadline, killed.stdout.read()
         time.sleep(0.5)
     leftover = json.loads(session.read_text())["container"]
+    containers.append(leftover)
     killed.send_signal(signal.SIGKILL)
     killed.wait()
 
     assert container_state(leftover) == "running"
-    code, output = finished(stub_run(project, "true", "--runs-dir", "second", "--name", "r"))
+    code, output = finished(stub_run(processes, project, "true", "--runs-dir", "second", "--name", "r"))
     assert code == 0, output
     assert json.loads((project / "second/r/session.json").read_text())["container"] != leftover
     subprocess.run(["docker", "rm", "-f", leftover], check=True, capture_output=True)
     assert container_state(leftover) is None
 
 
-def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project):
+def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project, leftovers):
     writes = (
         "mkdir -p /workspace/out/deep /root/.local/share/opencode/cache"
         " && echo x > /workspace/out/deep/file && ln -s /workspace/out /workspace/link"
         " && echo y > /root/.config/opencode/state.json && touch /root/.local/share/opencode/cache/entry"
         " && chmod 700 /workspace/out /root/.local/share/opencode/cache && chmod 600 /workspace/out/deep/file"
     )
-    code, output = finished(stub_run(project, writes, "--name", "owned"))
+    code, output = finished(stub_run(leftovers[0], project, writes, "--name", "owned"))
 
     assert code == 0, output
     run = project / "runs/owned"

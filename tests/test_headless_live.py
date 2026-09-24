@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -25,6 +26,7 @@ CONFIGS = {
     },
 }
 ASK_USER_TOOL = {"claude": "AskUserQuestion", "opencode": "question"}
+DENIAL = re.compile(r"denied|not allowed|prevents you|no such tool|unavailable tool|not available|disallowed", re.I)
 
 
 def smoke(tmp_path: Path, harness: str, extra: str = "") -> tuple[str, subprocess.CompletedProcess, Path]:
@@ -95,4 +97,18 @@ def test_a2_ac10_an_ask_user_instruction_never_waits_for_input(tmp_path, harness
     if outcome["status"] != "completed":
         assert outcome["status"] == "failed"
         assert outcome["reason"]["code"] in {"harness_exit", "harness_reported_error", "no_assistant_output"}
-        assert [e for e in trace if e["type"] == "tool_call" and e["tool"] == ASK_USER_TOOL[harness] and e["is_error"]]
+        [failing] = [t for t in outcome["turns"] if t["status"] == "failed"]
+        tool = ASK_USER_TOOL[harness]
+        denied_calls = [
+            e for e in trace
+            if e["type"] == "tool_call" and e["turn"] == failing["index"] and e["is_error"]
+            and tool in f"{e['tool']} {e['output']}" and DENIAL.search(e["output"] or "")
+        ]
+        native = [
+            json.loads(line) for line in (run / f"turns/{failing['index']}/stdout.jsonl").read_text().splitlines()
+        ]
+        denied_natively = [
+            d for e in native if e.get("type") == "result" for d in e.get("permission_denials") or []
+            if d.get("tool_name") == tool
+        ]
+        assert denied_calls or denied_natively
