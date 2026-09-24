@@ -141,7 +141,8 @@ Every terminal state except exit 2 leaves:
 Container names are `ahl-<run id>-<8 hex>`, unique per invocation, so a
 leftover container never blocks a new run. AHL removes the container in every
 terminal state, after stopping the harness and handing the files it wrote to
-the calling user. If AHL is killed with SIGKILL, the container keeps running;
+the calling user. Files inside `mounts:` binds and other external mounts keep
+their owners. If AHL is killed with SIGKILL, the container keeps running;
 remove it with `docker rm -f <container>` from `session.json`.
 
 ## Configuration

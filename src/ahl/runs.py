@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import secrets
 import subprocess
 from dataclasses import dataclass
@@ -34,8 +35,12 @@ class PreparedRun:
     setup_commands: list[str]
 
     @property
-    def writable_paths(self) -> list[str]:
-        return [CONTAINER_WORKSPACE, *(target for _, target in self.extra_volumes)]
+    def writable_mounts(self) -> Volumes:
+        return [(self.workspace, CONTAINER_WORKSPACE), *self.extra_volumes]
+
+    @property
+    def external_mounts(self) -> Volumes:
+        return [*self.readonly_volumes, *((mount.path, mount.target) for mount in self.config.mounts)]
 
 
 def prepare_run(
@@ -88,10 +93,27 @@ def prepare_run(
     if headless:
         record["mode"] = "headless"
     _write_session(run_dir, config, workspace, record, resumed=resume)
-    return PreparedRun(
+    run = PreparedRun(
         run_dir, config, adapter, container, args, workspace,
         extra_volumes, readonly_volumes, package_copies, setup_commands,
     )
+    _create_mountpoints(run)
+    return run
+
+
+def _create_mountpoints(run: PreparedRun) -> None:
+    # Docker creates a missing mountpoint as root, which would leave root-owned paths in a writable mount.
+    for source, target in run.external_mounts:
+        parents = [(host, path) for host, path in run.writable_mounts if target.startswith(path + "/")]
+        if not parents:
+            continue
+        host, path = max(parents, key=lambda mount: len(mount[1]))
+        mountpoint = host / posixpath.relpath(target, path)
+        if source.is_dir():
+            mountpoint.mkdir(parents=True, exist_ok=True)
+        else:
+            mountpoint.parent.mkdir(parents=True, exist_ok=True)
+            mountpoint.touch(exist_ok=True)
 
 
 def write_native_trace(run: PreparedRun) -> Path | None:

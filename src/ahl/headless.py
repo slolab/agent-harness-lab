@@ -213,9 +213,14 @@ class _HeadlessRun:
 
     def _teardown(self) -> None:
         owner = f"{os.getuid()}:{os.getgid()}"
-        paths = shlex.join(self.run.writable_paths)
+        external = [arg for _, target in self.run.external_mounts for arg in ("-o", "-path", target)][1:]
+        chown = shlex.join([
+            "find", *(target for _, target in self.run.writable_mounts),
+            *(["(", *external, ")", "-prune", "-o"] if external else []), "-exec", "chown", "-h", owner, "{}", "+",
+        ])
         # kill -1 spares only PID 1 and the caller, so no harness process writes after the chown.
-        if not self._in_container(f"kill -KILL -1 2>/dev/null; chown -R -h {owner} {paths} 2>/dev/null; exit 0"):
+        # The prune leaves nested external binds, and the files in them, to their owners.
+        if not self._in_container(f"kill -KILL -1 2>/dev/null; {chown} 2>/dev/null; exit 0"):
             typer.echo(
                 f"[ahl] warning: container {self.run.container} is gone; files it wrote under {self.run.dir} "
                 "may belong to root",

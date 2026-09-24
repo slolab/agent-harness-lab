@@ -102,11 +102,21 @@ def test_a2_ac3_timeout_and_killed_runs_leave_no_blocking_container(project, lef
 
 
 def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project, leftovers):
+    (project / "external/ro").mkdir(parents=True)
+    (project / "external/rw").mkdir()
+    (project / "external/rw/theirs").write_text("z")
+    config = yaml.safe_load((project / "config.yaml").read_text())
+    config["mounts"] = [
+        {"path": "external/ro", "target": "/workspace/data"},
+        {"path": "external/rw", "target": "/workspace/shared", "readonly": False},
+    ]
+    (project / "config.yaml").write_text(yaml.safe_dump(config))
     writes = (
         "mkdir -p /workspace/out/deep /root/.local/share/opencode/cache"
         " && echo x > /workspace/out/deep/file && ln -s /workspace/out /workspace/link"
         " && echo y > /root/.config/opencode/state.json && touch /root/.local/share/opencode/cache/entry"
         " && chmod 700 /workspace/out /root/.local/share/opencode/cache && chmod 600 /workspace/out/deep/file"
+        " && chown 12345:12345 /workspace/shared/theirs"
     )
     code, output = finished(stub_run(leftovers[0], project, writes, "--name", "owned"))
 
@@ -114,6 +124,8 @@ def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project, lef
     run = project / "runs/owned"
     assert (run / "workspace/out/deep/file").read_text() == "x\n"
     assert (run / "opencode/data/cache/entry").is_file() and (run / "workspace/link").is_symlink()
+    assert (run / "workspace/data").is_dir() and (run / "workspace/shared").is_dir()
+    assert (project / "external/rw/theirs").stat().st_uid == 12345
     owners = {(p.lstat().st_uid, p.lstat().st_gid) for p in [run, *run.rglob("*")]}
     assert owners == {(os.getuid(), os.getgid())}
     shutil.rmtree(run)
