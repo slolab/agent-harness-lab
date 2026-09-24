@@ -35,11 +35,11 @@ def up(
     ] = Path("config.yaml"),
     env_file: Annotated[
         Path | None,
-        typer.Option("--env-file", help="Env file with provider keys; wins over the shell [default: <config dir>/.env]"),
+        typer.Option("--env-file", help="Env file with provider keys; wins over the shell. Default: .env next to the config"),
     ] = None,
     runs_dir: Annotated[
         Path | None,
-        typer.Option("--runs-dir", help="Directory holding run directories [default: <config dir>/runs]"),
+        typer.Option("--runs-dir", help="Directory holding run directories. Default: runs/ next to the config"),
     ] = None,
     build: Annotated[
         bool, typer.Option("--build/--no-build", help="Build harness image before launching")

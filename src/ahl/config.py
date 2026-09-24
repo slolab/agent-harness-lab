@@ -207,6 +207,8 @@ def _parse_env(raw: Any) -> dict[str, str]:
 def _reject_managed_env(config: RunConfig) -> None:
     from ahl.harnesses import get_adapter
 
+    if not config.env:
+        return
     managed = set(PROVIDER_KEY_ENV.values()) | set(get_adapter(config.harness.name).build_env(config))
     for name in config.env:
         if name in managed:

@@ -351,9 +351,10 @@ def test_a1_ac9_defaults_read_local_env_write_local_runs_and_build(tmp_path, mon
     ]
 
 
-def test_a1_ac10_example_config_demonstrates_new_keys_and_loads(tmp_path, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    example = load_config(EXAMPLE)
+def test_a1_ac10_example_config_demonstrates_new_keys_and_loads(tmp_path):
+    keys = tmp_path / "keys.env"
+    keys.write_text("GEMINI_API_KEY=test-key\n")
+    example = load_config(EXAMPLE, keys)
     assert example.root == EXAMPLE.parent
     assert example.workspace.path == EXAMPLE.parent / "projects/demo"
 
@@ -364,19 +365,18 @@ def test_a1_ac10_example_config_demonstrates_new_keys_and_loads(tmp_path, monkey
         elif not line.startswith("#   "):
             active = False
         lines.append(line[2:] if active else line)
+    text = "\n".join(lines)
+    raw = yaml.safe_load(text)
     checkout = tmp_path / "checkout"
-    checkout.mkdir()
+    for entry in raw["mounts"] + raw["packages"]:
+        (checkout / entry["path"]).mkdir(parents=True, exist_ok=True)
     demo = checkout / "config.yaml"
-    demo.write_text("\n".join(lines))
-    raw = yaml.safe_load(demo.read_text())
-    for entry in raw["mounts"]:
-        (checkout / entry["path"]).mkdir(parents=True, exist_ok=True)
-    for entry in raw["packages"]:
-        (checkout / entry["path"]).mkdir(parents=True, exist_ok=True)
+    demo.write_text(text)
 
-    config = load_config(demo)
+    config = load_config(demo, keys)
 
-    assert config.mounts and [m.path for m in config.mounts] == [(checkout / e["path"]).resolve() for e in raw["mounts"]]
+    assert config.mounts
+    assert [m.path for m in config.mounts] == [(checkout / e["path"]).resolve() for e in raw["mounts"]]
     assert config.network == raw["network"]
     assert config.env == raw["env"] and config.env
     assert [p.path for p in config.packages] == [(checkout / e["path"]).resolve() for e in raw["packages"]]
