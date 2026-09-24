@@ -202,6 +202,7 @@ def test_launch_composes_native_skills_and_loopback_ports(
             cfg,
             adapter.build_env(cfg),
             tmp_path,
+            image="agent-harness-lab:deepseek",
             readonly_volumes=mounts,
             extra_args=adapter.docker_args(cfg),
         )

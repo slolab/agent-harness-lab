@@ -37,6 +37,7 @@ def docker_run_args(
     env: dict[str, str],
     workspace_dir: Path,
     *,
+    image: str,
     name: str | None = None,
     extra_volumes: Volumes | None = None,
     readonly_volumes: Volumes | None = None,
@@ -44,7 +45,6 @@ def docker_run_args(
     detached: bool = False,
     hold: bool = False,
     extra_args: list[str] | None = None,
-    image: str | None = None,
 ) -> list[str]:
     """`readonly_volumes` keep host checkouts under development safe from the agent; the workspace is always writable."""
     args = [
@@ -77,7 +77,7 @@ def docker_run_args(
         args.extend(["-v", f"{host}:{container}:ro"])
     for key, value in {**GIT_IDENTITY_ENV, **config.env, **env}.items():
         args.extend(["-e", f"{key}={value}"])
-    args.append(image or image_name(config.harness.name))
+    args.append(image)
     if hold or detached:
         args.extend([INIT_SCRIPT, "sleep", "infinity"])
     elif setup_commands:
