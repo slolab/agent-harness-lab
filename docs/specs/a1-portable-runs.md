@@ -30,7 +30,7 @@ AHL can be used as a pinned dependency of another repository. A config file, an 
 - `load_config(config_path, env_file=None)`.
 - Paths given on the command line (`-c`, `--env-file`, `--runs-dir`, and A2's `--turn`) resolve against the current working directory.
 - Paths inside the config file (`workspace`, `capabilities[].path`, `packages[].path`, `mounts[].path`) resolve against the config file's directory, wherever the CLI is run from. This already holds for the existing keys; the tests pin it down for a config outside the checkout.
-- The env file is `--env-file PATH` if given, otherwise `<config dir>/.env` if it exists. An `--env-file` path that does not exist raises a `ConfigError`. Variables already set in the shell take precedence, as today.
+- The env file is `--env-file PATH` if given, otherwise `<config dir>/.env` if it exists. An `--env-file` path that does not exist raises a `ConfigError`. An explicit `--env-file` wins over variables already set in the shell, for the keys it defines. The implicit `<config dir>/.env`, used when `--env-file` is not given, keeps today's behaviour: shell variables win.
 - A missing provider key produces an error that names the env file that was read, or says that none was read.
 
 ### Run directory
@@ -99,8 +99,8 @@ packages:
 - **AC-2** (unit) Env file:
   - `--env-file PATH` loads that file, and a relative `PATH` resolves against the working directory;
   - an `--env-file` path that does not exist raises a `ConfigError` naming the path;
-  - shell variables win over the file;
-  - without the flag, `<config dir>/.env` is loaded if present;
+  - with `--env-file`, the file's value wins over a conflicting shell variable;
+  - without the flag, `<config dir>/.env` is loaded if present, and the shell wins over it, as today;
   - the missing-key error names the env file read, or says none was read.
 - **AC-3** (unit) `--runs-dir DIR` creates the run at `DIR/<run id>`. A relative `DIR` resolves against the working directory, not the config directory. `--name` and `--resume` resolve inside `DIR`. Without the flag, runs go to `<config dir>/runs`.
 - **AC-4** (unit) Dockerfiles and build contexts resolve from the installed `ahl` package (`src/ahl/images/`), independent of the config directory and the working directory.
