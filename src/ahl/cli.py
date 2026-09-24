@@ -81,6 +81,17 @@ def up(
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    runs_root = runs_dir.expanduser().resolve() if runs_dir else run_config.root / "runs"
+    run_id = resume or name or _run_id(run_config.harness.name)
+    run_dir = runs_root / run_id
+    taken = f"run '{run_id}' already exists at {run_dir} (use --resume to continue it)"
+    if resume:
+        if not run_dir.is_dir():
+            raise typer.BadParameter(f"no run named '{run_id}' found at {run_dir}")
+        _check_resumable(run_dir, run_config)
+    elif run_dir.exists():
+        raise typer.BadParameter(taken)
+
     # Docker Desktop treats non-zero `docker run` exits (e.g. shell exit after
     # Ctrl-C → status 130) as "container errors" and prints Gordon tips.
     os.environ.setdefault("DOCKER_CLI_HINTS", "false")
@@ -91,22 +102,11 @@ def up(
         _build_image(run_config.harness.name, run_config.harness_version)
     image = _image_record(run_config.harness.name)
 
-    runs_root = runs_dir.expanduser().resolve() if runs_dir else run_config.root / "runs"
-    if resume:
-        run_id = resume
-        run_dir = runs_root / run_id
-        if not run_dir.is_dir():
-            raise typer.BadParameter(f"no run named '{run_id}' found at {run_dir}")
-        _check_resumable(run_dir, run_config)
-    else:
-        run_id = name or _run_id(run_config.harness.name)
-        run_dir = runs_root / run_id
+    if not resume:
         try:
             run_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError as exc:
-            raise typer.BadParameter(
-                f"run '{run_id}' already exists at {run_dir} (use --resume to continue it)"
-            ) from exc
+            raise typer.BadParameter(taken) from exc
 
     try:
         workspace_dir = resolve_workspace(run_dir, run_config.workspace, resume=bool(resume))

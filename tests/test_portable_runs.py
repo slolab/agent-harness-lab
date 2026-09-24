@@ -66,11 +66,10 @@ def test_a1_ac1_paths_resolve_against_config_dir_and_working_dir(tmp_path, monke
     cwd.mkdir()
     monkeypatch.chdir(cwd)
     common = [
-        "up", "-c", "../project/conf/config.yaml", "--env-file", "../secrets/keys.env",
-        "--runs-dir", "out/runs", "--no-build",
+        "up", "-c", "../project/conf/config.yaml", "--env-file", "../secrets/keys.env", "--runs-dir", "out/runs",
     ]
 
-    result = ahl_cli(*common, "--name", "r1")
+    result = ahl_cli(*common, "--no-build", "--name", "r1")
 
     assert result.exit_code == 0, result.output
     run = cwd / "out/runs/r1"
@@ -85,8 +84,9 @@ def test_a1_ac1_paths_resolve_against_config_dir_and_working_dir(tmp_path, monke
     assert (run / "workspace/seed.txt").read_text() == "seed"
     (run / "workspace/progress.txt").write_text("kept")
 
-    assert ahl_cli(*common, "--name", "r1").exit_code == 2
-    resumed = ahl_cli(*common, "--resume", "r1")
+    assert [ahl_cli(*common, *flags).exit_code for flags in [["--name", "r1"], ["--resume", "r2"]]] == [2, 2]
+    assert docker.builds() == [] and docker.registry_requests == []
+    resumed = ahl_cli(*common, "--no-build", "--resume", "r1")
 
     assert resumed.exit_code == 0, resumed.output
     assert (run / "workspace/progress.txt").read_text() == "kept"
