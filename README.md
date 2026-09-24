@@ -166,11 +166,10 @@ rebuild with `ahl build`.
 ## Observability
 
 Each `ahl up` writes `runs/<id>/session.json` (harness, provider, model,
-workspace mode, timestamp, permissions) with provenance: `ahl` holds the AHL
-version and, when AHL runs from a git checkout, its commit and whether the
-checkout has uncommitted changes (`git_sha`, `git_dirty`, otherwise null);
-`image` holds the name, ID and `ahl.harness.version` label of the image the
-container started from, also with `--no-build`. **gemini**, **opencode**, **claude**, and **deepseek** persist
+workspace mode, timestamp, permissions). It also records provenance: `ahl`
+(version, plus `git_sha` and `git_dirty` when AHL runs from a git checkout,
+otherwise null) and `image` (name, ID and `ahl.harness.version` label of the
+image the container started from). **gemini**, **opencode**, **claude**, and **deepseek** persist
 their own session state under `runs/<id>/` and get a normalized `trace.json`
 on exit (sessions, messages, tool calls). Claude Science tracing is an
 explicit non-goal for its initial harness; **agy** still has no confirmed log
