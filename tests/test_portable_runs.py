@@ -268,7 +268,9 @@ def test_a1_ac6_mounts_bind_read_only_by_default_and_reject_invalid_entries(make
         ([{"path": "./missing", "target": "/x"}], r"mounts\[0\].*does not exist"),
         ([{"path": "./data", "target": "data"}], r"mounts\[0\].*absolute"),
         ([{"path": "./data", "target": "/workspace/"}], r"mounts\[0\].*/workspace"),
+        ([{"path": "./data", "target": "//workspace"}], r"mounts\[0\].*/workspace"),
         ([{"path": "./data", "target": "/d"}, {"path": "./scratch", "target": "/d"}], r"mounts\[1\].*duplicate"),
+        ([{"path": "./data", "target": "/d"}, {"path": "./scratch", "target": "//d/"}], r"mounts\[1\].*duplicate"),
         ([{"path": "./data", "target": "/d", "readonly": "no"}], r"mounts\[0\].*readonly"),
     ]:
         with pytest.raises(ConfigError, match=error):

@@ -36,7 +36,7 @@ def parse_mounts(raw: Any, root: Path) -> list[Mount]:
         source = (root / Path(path).expanduser()).resolve()
         if not source.exists():
             raise ConfigError(f"{entry}: path does not exist: {source}")
-        target = posixpath.normpath(target)
+        target = "/" + posixpath.normpath(target).lstrip("/")
         if target == CONTAINER_WORKSPACE:
             raise ConfigError(f"{entry}: target cannot be {CONTAINER_WORKSPACE} itself")
         if any(m.target == target for m in mounts):
