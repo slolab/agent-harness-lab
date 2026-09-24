@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ahl.config import ConfigError
+from ahl.config import ConfigError, resolve_config_path
 
 KINDS = {"skill", "mcp", "plugin"}
 INSTALL_MODES = {"mount", "copy", "npx", "pip"}
@@ -98,10 +98,7 @@ def _expand_local_plugin(item: dict, name: str, install: str, root: Path) -> lis
     raw_path = item.get("path")
     if not isinstance(raw_path, str) or not raw_path:
         raise ConfigError(f"plugin '{name}': install: {install} requires 'path'")
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        path = root / path
-    path = path.resolve()
+    path = resolve_config_path(raw_path, root)
     if not (path / ".claude-plugin" / "plugin.json").is_file():
         raise ConfigError(f"plugin '{name}': no .claude-plugin/plugin.json at {path}")
     skills_dir = path / "skills"
@@ -164,10 +161,7 @@ def _parse_capability(item: Any, root: Path) -> Capability:
         raw_path = item.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             raise ConfigError(f"capability '{name}': install: {install} requires 'path'")
-        path = Path(raw_path).expanduser()
-        if not path.is_absolute():
-            path = root / path
-        path = path.resolve()
+        path = resolve_config_path(raw_path, root)
         if not path.is_dir():
             raise ConfigError(f"capability '{name}': path does not exist or is not a directory: {path}")
 

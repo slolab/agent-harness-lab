@@ -75,6 +75,10 @@ class RunConfig:
         return PROVIDER_KEY_ENV[self.provider.name]
 
 
+def resolve_config_path(value: str, root: Path) -> Path:
+    return (root / Path(value).expanduser()).resolve()
+
+
 def read_config(config_path: Path) -> dict[str, Any]:
     config_path = config_path.expanduser().resolve()
     if not config_path.exists():

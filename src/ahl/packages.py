@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ahl.config import ConfigError
+from ahl.config import ConfigError, resolve_config_path
 from ahl.docker import Volumes
 
 CONTAINER_PACKAGES_DIR = "/opt/ahl-packages"
@@ -66,10 +66,7 @@ def _parse_package(item: Any, root: Path) -> Package:
     raw_path = item.get("path")
     if not isinstance(raw_path, str) or not raw_path:
         raise ConfigError(f"package '{name}': missing required 'path'")
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        path = root / path
-    path = path.resolve()
+    path = resolve_config_path(raw_path, root)
     if not path.is_dir():
         raise ConfigError(f"package '{name}': path does not exist or is not a directory: {path}")
 

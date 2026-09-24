@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ahl.config import ConfigError
+from ahl.config import ConfigError, resolve_config_path
 
 INSTALL_MODES = {"mount", "copy"}
 
@@ -31,7 +31,7 @@ def parse_workspace(value: Any, root: Path) -> Workspace:
     if isinstance(value, str):
         if not value:
             raise ConfigError("'workspace' must be a non-empty string, a mapping, or omitted")
-        return Workspace(path=_resolve_path(value, root), install="copy")
+        return Workspace(path=resolve_config_path(value, root), install="copy")
     if isinstance(value, dict):
         install = value.get("install", "copy")
         if install not in INSTALL_MODES:
@@ -43,15 +43,8 @@ def parse_workspace(value: Any, root: Path) -> Workspace:
             return Workspace(path=None, install=install)
         if not isinstance(raw_path, str) or not raw_path:
             raise ConfigError("'workspace.path' must be a non-empty string")
-        return Workspace(path=_resolve_path(raw_path, root), install=install)
+        return Workspace(path=resolve_config_path(raw_path, root), install=install)
     raise ConfigError("'workspace' must be a string, a mapping, or omitted")
-
-
-def _resolve_path(value: str, root: Path) -> Path:
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = root / path
-    return path.resolve()
 
 
 def resolve_workspace(run_dir: Path, workspace: Workspace, *, resume: bool = False) -> Path:

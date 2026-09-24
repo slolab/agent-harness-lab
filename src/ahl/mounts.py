@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ahl.config import ConfigError
+from ahl.config import ConfigError, resolve_config_path
 from ahl.docker import CONTAINER_WORKSPACE
 
 
@@ -33,7 +33,7 @@ def parse_mounts(raw: Any, root: Path) -> list[Mount]:
             raise ConfigError(f"{entry}: 'target' must be an absolute container path, got {target!r}")
         if not isinstance(readonly, bool):
             raise ConfigError(f"{entry}: 'readonly' must be true or false")
-        source = (root / Path(path).expanduser()).resolve()
+        source = resolve_config_path(path, root)
         if not source.exists():
             raise ConfigError(f"{entry}: path does not exist: {source}")
         target = "/" + posixpath.normpath(target).lstrip("/")
