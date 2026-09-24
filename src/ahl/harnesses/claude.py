@@ -17,6 +17,7 @@ from ahl.harnesses.base import (
     json_lines,
     native_skill_mount,
     provider_key,
+    read_saved_output,
     warn_unsupported_mcp,
 )
 from ahl.trace import event, parse_ts
@@ -215,20 +216,25 @@ def _usage_ledger(entries: list[_Entry]) -> _ResponseLedger:
     return ledger
 
 
-def _tool_results(entries: list[_Entry]) -> dict[str, tuple[str, bool]]:
-    return {
-        str(block["tool_use_id"]): (_extract_text(block.get("content")), bool(block.get("is_error")))
-        for record, _, _ in entries
-        for block in _blocks(record)
-        if block.get("type") == "tool_result" and block.get("tool_use_id")
-    }
+def _tool_results(entries: list[_Entry], home: Path) -> dict[str, tuple[str, bool]]:
+    results = {}
+    for record, _, _ in entries:
+        # Claude Code keeps a preview in the tool result when it saves a long output under its home.
+        details = record.get("toolUseResult")
+        path = details.get("persistedOutputPath") if isinstance(details, dict) else None
+        saved = read_saved_output(home, CONTAINER_CLAUDE_HOME, path)
+        for block in _blocks(record):
+            if block.get("type") == "tool_result" and block.get("tool_use_id"):
+                output = saved if saved is not None else _extract_text(block.get("content"))
+                results[str(block["tool_use_id"])] = (output, bool(block.get("is_error")))
+    return results
 
 
 def _parse_trace(home: Path) -> dict[str, Any]:
     sessions = []
     responses: _ResponseLedger = {}
     for path, entries in _session_files(home):
-        parsed = _parse_session(path, entries)
+        parsed = _parse_session(path, entries, home)
         if parsed is None:
             continue
         session, session_responses = parsed
@@ -261,13 +267,13 @@ def _trace_totals(
 
 
 def _parse_session(
-    path: Path, entries: list[_Entry],
+    path: Path, entries: list[_Entry], home: Path,
 ) -> tuple[dict[str, Any], _ResponseLedger] | None:
     records = [record for record, _, _ in entries]
     if not records:
         return None
     responses = _usage_ledger(entries)
-    results = _tool_results(entries)
+    results = _tool_results(entries, home)
     messages: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
     for record in records:
@@ -379,7 +385,7 @@ def _trace_events(home: Path) -> list[dict[str, Any]]:
                     continue
                 seen.add(uuid)
             entries.append(entry)
-    ledger, results = _usage_ledger(entries), _tool_results(entries)
+    ledger, results = _usage_ledger(entries), _tool_results(entries, home)
 
     items: list[dict[str, Any] | _Response] = []
     responses: dict[_ResponseId, _Response] = {}

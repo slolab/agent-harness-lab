@@ -88,6 +88,10 @@ Subagent records carry `isSidechain` and an `agentId`, which becomes `agent`.
   produce no `usage`; the latter become `error` events.
 - `thinking` blocks become `reasoning`. User records marked `isMeta`, and
   text sent alongside tool results, are `system` messages.
+- A tool call's output is its `tool_result` text. When Claude Code saved a
+  long output to a file, the tool result holds a `<persisted-output>` preview
+  and the output is that file, named by `toolUseResult.persistedOutputPath`
+  under the Claude home.
 - Tokens: `input_tokens` = `input_tokens`, `cache_read_tokens` =
   `cache_read_input_tokens`, `cache_write_tokens` =
   `cache_creation_input_tokens`, `output_tokens` = `output_tokens`, which

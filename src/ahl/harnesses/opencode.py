@@ -18,6 +18,7 @@ from ahl.harnesses.base import (
     json_lines,
     native_skill_mount,
     provider_key,
+    read_saved_output,
     warn_unsupported_mcp,
 )
 from ahl.permissions import PermissionPolicy, PermissionSetup
@@ -364,7 +365,8 @@ def _joined(parts: list[dict[str, Any]], kind: str, synthetic: bool = False) -> 
 def _tool_call(header: tuple[str, str, str | None], part: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     state = part.get("state") or {}
     status = state.get("status")
-    output = _saved_output(data_dir, (state.get("metadata") or {}).get("outputPath"))
+    # OpenCode keeps a preview in state.output when it saves a long output under its data directory.
+    output = read_saved_output(data_dir, CONTAINER_DATA_DIR, (state.get("metadata") or {}).get("outputPath"))
     if output is None:
         output = {"completed": state.get("output"), "error": state.get("error")}.get(status)
     tool_input = state.get("input")
@@ -377,17 +379,6 @@ def _tool_call(header: tuple[str, str, str | None], part: dict[str, Any], data_d
         output=output if isinstance(output, str) else None,
         is_error={"completed": False, "error": True}.get(status),
     )
-
-
-def _saved_output(data_dir: Path, container_path: Any) -> str | None:
-    # OpenCode keeps a preview in state.output and saves a long output under its data directory. Only
-    # that run-owned directory is read, since the agent can write the path into opencode.db.
-    if not isinstance(container_path, str) or not container_path.startswith(f"{CONTAINER_DATA_DIR}/"):
-        return None
-    path = (data_dir / container_path.removeprefix(f"{CONTAINER_DATA_DIR}/")).resolve()
-    if not path.is_relative_to(data_dir.resolve()) or not path.is_file():
-        return None
-    return path.read_text(errors="replace")
 
 
 def _usage(info: dict[str, Any]) -> dict[str, Any] | None:

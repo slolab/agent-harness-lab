@@ -70,6 +70,9 @@ def claude_response(uuid: str, second: int, message_id: str, content: list, outp
 
 
 def write_claude(run: Path) -> list[tuple]:
+    saved = "projects/-workspace/S/tool-results/t2.txt"
+    (run / "claude" / saved).parent.mkdir(parents=True)
+    (run / "claude" / saved).write_text(FULL_OUTPUT)
     prompt = {"type": "user", "uuid": "u1", "timestamp": at(0), "message": {"role": "user", "content": "do it"}}
     main = [
         prompt,
@@ -78,10 +81,14 @@ def write_claude(run: Path) -> list[tuple]:
         claude_response("u3", 2, "m1", [{"type": "thinking", "thinking": "plan"}], 1),
         claude_response("u4", 3, "m1", [
             {"type": "text", "text": "running"}, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+            {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}},
         ], 9),
         {"type": "user", "uuid": "u5", "timestamp": at(5), "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "a.txt"}, {"type": "text", "text": "note"},
         ]}},
+        {"type": "user", "uuid": "u10", "timestamp": at(5), "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": "<persisted-output>preview</persisted-output>"},
+        ]}, "toolUseResult": {"stdout": "capped", "persistedOutputPath": f"/root/.claude/{saved}"}},
         {"type": "system", "uuid": "u6", "content": "compacted"},
         {**claude_response("u7", 7, "m2", [{"type": "text", "text": "API Error: 529"}], 0), "isApiErrorMessage": True},
         claude_response("u8", 8, "m3", [{"type": "text", "text": "No response requested."}], 0),
@@ -98,6 +105,7 @@ def write_claude(run: Path) -> list[tuple]:
         ("message", 1, "main", "system", "reminder", None),
         ("message", 1, "main", "assistant", "running", "plan"),
         ("tool_call", 1, "main", "Bash", "a.txt", False),
+        ("tool_call", 1, "main", "Bash", FULL_OUTPUT, False),
         ("usage", 1, "main", 3, 9, 10, 2, 1),
         ("message", 1, "a1", "assistant", "sub done", None),
         ("usage", 1, "a1", 3, 2, 10, 2, 1),

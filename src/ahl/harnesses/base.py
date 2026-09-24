@@ -62,6 +62,17 @@ def json_lines(text: str) -> list[dict[str, Any]]:
     return records
 
 
+def read_saved_output(host_dir: Path, container_dir: str, container_path: Any) -> str | None:
+    # Harnesses save a long tool output to a file and record its path where the agent can rewrite it,
+    # so only files inside the run-owned directory are read.
+    if not isinstance(container_path, str) or not container_path.startswith(f"{container_dir}/"):
+        return None
+    path = (host_dir / container_path.removeprefix(f"{container_dir}/")).resolve()
+    if not path.is_relative_to(host_dir.resolve()) or not path.is_file():
+        return None
+    return path.read_text(errors="replace")
+
+
 def provider_key(config: RunConfig) -> str:
     return os.environ[PROVIDER_KEY_ENV[config.provider.name]]
 
