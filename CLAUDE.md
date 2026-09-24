@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file guides Claude Code and other coding agents working in this repository. `AGENTS.md` is a symlink to it.
 
 ## What this is
 
@@ -52,7 +52,7 @@ Single Python package, `src/ahl/`, exposed via the `ahl` console script (Typer a
 - **Per-run directory** (`runs/<id>/`): everything seeded for/produced by one container run lives there (harness home/config dirs, the resolved `workspace/` copy, `session.json`, `trace.json`). Keep new per-run artifacts under this directory rather than introducing new top-level state dirs.
 - **No proxy.** Observability is built by mounting and parsing each harness's own log/session directory, not by intercepting LLM or MCP traffic. See "Key architectural decision" above.
 - **Egress is currently unrestricted** (`docker/init-firewall.sh` is a deliberate passthrough). Re-enabling default-deny egress (needs `--cap-add=NET_ADMIN`) is deferred until log-based observability lands for the remaining harnesses — don't quietly "fix" this without flagging it.
-- **Tracked vs untracked**: `src/`, `docker/`, `docs/`, `pyproject.toml`, `config.example.yaml`, `.env.example` are tracked. `config.yaml`, `.env`, `runs/`, `projects/` are local state and stay untracked (see `.gitignore`).
+- **Tracked vs untracked**: `src/`, `docker/`, `docs/`, `tests/`, `.github/`, `pyproject.toml`, `uv.lock`, `config.example.yaml`, `.env.example` are tracked. `config.yaml`, `.env`, `runs/`, `projects/` are local state and stay untracked (see `.gitignore`).
 
 ## OpenRouter and DeepSeek extension points
 
@@ -102,30 +102,42 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 | Fix agent (subagent) | Addresses later review comments, one round at a time |
 | Vlad | Reviews specs before implementation, reviews PRs last, merges |
 
+### Order of work
+
+1. The orchestrator writes the spec in a PR. Vlad reviews and merges it.
+2. An implementer builds the milestone and opens a draft PR.
+3. One review agent reviews the PR. There is one review-agent pass per PR.
+4. The finalizer answers every review thread, gets CI green and marks the PR ready.
+5. The orchestrator watches the PR for comments from Vlad and from agents Vlad dispatches, and dispatches fix agents until every comment is addressed.
+6. Vlad merges.
+
 ### Branches, worktrees and PRs
 
 - Never commit to `main`. Only Vlad merges, by squash merge.
 - One milestone per branch, named `<id>-<slug>`, for example `a1-portable-runs`. Work in a worktree at `../.worktrees/<repo>/<branch>`, or use the Agent tool's worktree isolation.
+- A new worktree has no `.env`; before running live tests, symlink it from the main checkout with `ln -s /home/vladsam42/Projects/biotope_project/agent-harness-lab/.env .env`.
 - Open a draft PR as soon as the branch has its first commit. Title it `<ID>: <title>` and fill in the PR template.
-- AHL PRs merge first. Bench then moves the `vendor/agent-harness-lab` submodule to a commit on AHL's `main`, never to an unmerged branch.
+- When a bench milestone needs an AHL change, the AHL PR merges first. Bench then moves the `vendor/agent-harness-lab` submodule to a commit on AHL's `main`, never to an unmerged branch.
 - Use Conventional Commits that name the milestone, for example `feat(a1): resolve paths against the config file`.
 
 ### Specs are the contract
 
 - Every milestone has a spec in `docs/specs/<id>-<slug>.md`. Vlad approves it by merging it to `main`, and from then on it is frozen.
 - Implement the spec as written. **Never weaken, drop or reinterpret an acceptance criterion to make progress.**
-- If a criterion is wrong, impossible or far harder than expected, stop. Post a PR comment starting `🤖 implementer: BLOCKED on AC-n` with the evidence and the options you see. The orchestrator takes it to Vlad.
-- A spec change goes in its own commit prefixed `spec-change:`, with the reason, and needs Vlad's explicit approval in the PR.
+- The implementer never edits a spec. If a criterion is wrong, impossible or far harder than expected, post a PR comment starting `🤖 implementer: BLOCKED on AC-n` with the evidence and the options you see, and stop work on that criterion.
+- The orchestrator takes the question to Vlad. Only after Vlad approves a change in a PR comment does the orchestrator commit it, in its own commit prefixed `spec-change:`, with the reason and the URL of Vlad's approving comment in the commit message.
 - Findings outside the spec become new GitHub issues, not extra scope.
 
 ### Tests first
 
 - Write the test for an acceptance criterion before the code that satisfies it. Name it after the criterion, for example `test_a1_ac3_runs_dir_override`.
-- Three tiers:
+- Three tiers, selected by pytest markers:
   - **unit:** the default, runs in CI.
   - **`@pytest.mark.docker`:** needs Docker, runs locally.
   - **`@pytest.mark.live`:** spends OpenRouter credit, runs locally only, never in CI.
-- Never make a test pass by weakening it: no new `skip` or `xfail`, no removed assertions, no loosened tolerances, no mocking of the code under test, no expected values hard-coded into production code. If a test is wrong, say so in the PR and get agreement first.
+- The pytest config keeps the docker and live tiers out of the default run: `addopts = "--strict-markers -m 'not docker and not live'"`, with both markers registered. `uv run pytest` runs the unit tier, and `-m docker` or `-m live` runs the others. A marked test run by node id still needs its marker, for example `uv run pytest -m live tests/test_x.py::test_a1_ac5`. AHL has it in `pyproject.toml`.
+- Never make a test pass by weakening it: no new `skip` or `xfail`, no removed assertions, no loosened tolerances, no mocking of the code under test, no expected values hard-coded into production code.
+- A wrong test needs Vlad's agreement before it changes. Say so in the PR and wait for his approval in a PR comment.
 - A bug fix starts with a failing test that reproduces it.
 - Live and Docker evidence goes in the PR description: the command, abridged output and, for live runs, the OpenRouter cost.
 
@@ -133,18 +145,19 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 - Every comment an agent posts on GitHub starts with its role tag: `🤖 orchestrator:`, `🤖 implementer:`, `🤖 review-agent:`, `🤖 finalizer:` or `🤖 fix-agent:`. All agents post through Vlad's account, so a comment without a tag is Vlad's.
 - Reply to every review thread with the fixing commit's SHA, or with the reason for not changing anything.
-- Agents resolve threads that agents opened, once they are fixed. Threads Vlad opened stay open until Vlad resolves them.
+- The agent that fixes an agent-opened thread resolves it. Threads answered without a change stay open for Vlad, and threads Vlad opened stay open until Vlad resolves them.
 - Review agents check, for every PR:
   - each acceptance criterion is implemented and has a real test;
-  - the spec is unchanged: `git diff origin/main...HEAD -- docs/specs/` is empty, or every change is a `spec-change:` commit;
+  - for implementation PRs, the spec is unchanged: `git diff origin/main...HEAD -- docs/specs/` is empty except for `spec-change:` commits that each cite an approving comment by Vlad (an untagged comment). An unapproved spec change is blocking. Spec PRs and bootstrap PRs are exempt from this check;
   - no test was weakened (see above);
-  - the live and Docker evidence is genuine;
+  - the evidence holds up: re-run the unit and Docker tiers locally, and check the pasted live output and cost against any run records the PR commits (in bench, `results/`). Do not re-run the live tier;
   - the code is correct and readable.
 
 ### Definition of done
 
 - Every acceptance criterion is implemented and mapped to a passing test in the PR description.
 - CI is green. The Docker and live tiers the spec requires have run locally, with evidence in the PR.
+- The PR description lists every `spec-change:` commit under "Spec changes", because squash merge drops commit subjects.
 - Docs, including this file, match the change.
 - No review thread is left unanswered.
 - The tracking issue shows the new status.
@@ -152,3 +165,8 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 ### Handoffs
 
 End every working session on a PR with a comment covering what is done, what is next, blockers and open questions. The next agent starts from that comment.
+
+## Style
+
+- Python 3.11+, formatted and linted with ruff. Match the surrounding code.
+- Documents use plain, compact prose: short sentences, concrete statements, no rhetorical emphasis or repeated conclusions.

@@ -200,4 +200,4 @@ Tracked: `src/`, `docker/`, `docs/`, `tests/`, `.github/`, `pyproject.toml`,
 
 ## Roadmap
 
-See `docs/specs.md` (product spec), `docs/specs/` (milestone specs) and the GitHub issues. Contributor and agent rules are in `CLAUDE.md` (also `AGENTS.md`). Next up: MCP capability wiring, better log exploration, repeatable execution of tasks by the harness
+See `docs/specs.md` (product spec), `docs/specs/` (milestone specs) and the GitHub issues. Contributor and agent rules are in `CLAUDE.md` (also `AGENTS.md`). Next up: milestones A1–A3 of the [biotope-bench roadmap](https://github.com/slolab/biotope-bench/blob/main/docs/roadmap.md) (portable runs, headless `ahl run`, a Codex harness). The older backlog is in [#4](https://github.com/slolab/agent-harness-lab/issues/4).

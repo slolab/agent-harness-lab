@@ -8,7 +8,7 @@ Milestone: <ID> · Spec: `docs/specs/<id>-<slug>.md` · Tracking: slolab/biotope
 
 | AC | Test(s) | Tier | Status |
 |---|---|---|---|
-| AC-1 | `test_<id>_ac1_…` | unit | ✅ |
+| AC-1 | `test_<id>_ac1_…` | unit | <pass/fail> |
 
 ## Evidence
 
@@ -18,7 +18,7 @@ Milestone: <ID> · Spec: `docs/specs/<id>-<slug>.md` · Tracking: slolab/biotope
 
 ## Spec changes
 
-<!-- "None", or each `spec-change:` commit with its reason and a link to Vlad's approval. -->
+<!-- "None", or each `spec-change:` commit with its reason and a link to Vlad's approving comment. -->
 
 ## Deviations, risks and follow-up issues
 

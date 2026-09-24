@@ -1,0 +1,10 @@
+# Read by the CI secret scan and the pre-commit hook.
+# The default rules miss OpenRouter keys in bearer headers and JSON traces.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "openrouter-api-key"
+description = "OpenRouter API key"
+regex = '''sk-or-v1-[0-9a-f]{64}'''
+keywords = ["sk-or-v1-"]

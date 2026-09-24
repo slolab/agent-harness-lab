@@ -6,8 +6,9 @@ Each AHL milestone has one spec here, named `<id>-<slug>.md`. The product-level 
 
 1. **Draft.** The orchestrator writes the spec and opens a PR with it.
 2. **Approved.** Vlad reviews the spec and merges it to `main`. Implementation starts only after that.
-3. **Frozen.** The implementation PR links the spec and does not edit it. A needed change goes in a separate `spec-change:` commit with the reason and needs Vlad's approval in the PR.
-4. **Implemented.** The PR that implements the spec sets its status line to `implemented`.
+3. **Frozen.** The implementation PR links the spec and never edits it. A change needs Vlad's approval in a PR comment first. The orchestrator then commits it as `spec-change: …` (see "Specs are the contract" in [`CLAUDE.md`](../../CLAUDE.md)).
+
+Specs have no status line: merged means approved. Implementation status is tracked in the iteration's tracking issue, currently [slolab/biotope-bench#1](https://github.com/slolab/biotope-bench/issues/1).
 
 ## Rules for writing a spec
 
@@ -22,7 +23,6 @@ Each AHL milestone has one spec here, named `<id>-<slug>.md`. The product-level 
 ```markdown
 # <ID>: <title>
 
-Status: draft | approved | implemented
 Repo: <repo> · Needs: <milestones> · Roadmap decisions: <numbers>
 
 ## Goal
