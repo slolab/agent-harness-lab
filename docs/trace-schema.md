@@ -115,3 +115,5 @@ Messages of a child session (one with a `parent_id`) take that session id as
   `tokens.reasoning`, `cost_usd` = `cost`, computed by OpenCode from its model
   catalogue.
 - `response_id` is null; OpenCode does not store it. `model` is `modelID`.
+- OpenCode's request for a session title is not stored as a message, so its
+  tokens appear in the key delta but in no `usage` event.

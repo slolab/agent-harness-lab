@@ -177,16 +177,20 @@ def _run_dir(config: RunConfig, runs_dir: Path | None, name: str | None) -> Path
     return runs_root / (name or _run_id(config.harness.name))
 
 
+def _taken(run_dir: Path, hint: str) -> typer.BadParameter:
+    return typer.BadParameter(f"run '{run_dir.name}' already exists at {run_dir} ({hint})")
+
+
 def _check_new(run_dir: Path, hint: str) -> None:
     if run_dir.exists():
-        raise typer.BadParameter(f"run '{run_dir.name}' already exists at {run_dir} ({hint})")
+        raise _taken(run_dir, hint)
 
 
 def _claim(run_dir: Path, hint: str) -> None:
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
-        raise typer.BadParameter(f"run '{run_dir.name}' already exists at {run_dir} ({hint})") from exc
+        raise _taken(run_dir, hint) from exc
 
 
 def _docker_setup(config: RunConfig, build: bool, config_path: Path) -> dict[str, Any]:
