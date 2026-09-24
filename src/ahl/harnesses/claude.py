@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import shlex
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +19,7 @@ from ahl.harnesses.base import (
     provider_key,
     warn_unsupported_mcp,
 )
-from ahl.trace import event
+from ahl.trace import event, parse_ts
 
 CONTAINER_CLAUDE_HOME = "/root/.claude"
 CONTAINER_WORKSPACE_SKILLS = "/workspace/.claude/skills"
@@ -60,6 +59,15 @@ class _ResponseUsage:
 
 _ResponseId = tuple[str, str] | tuple[str, str, int]
 _ResponseLedger = dict[_ResponseId, _ResponseUsage]
+_Entry = tuple[dict[str, Any], str, int]
+
+
+@dataclass
+class _Response:
+    identity: _ResponseId
+    header: tuple[Any, str, Any]
+    message: dict[str, Any]
+    blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ClaudePermissions:
@@ -117,7 +125,7 @@ class ClaudeDriver:
         )
 
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
-        return _trace_events(run_dir / "claude")
+        return _trace_events(_home(run_dir))
 
 
 class ClaudeAdapter:
@@ -138,11 +146,8 @@ class ClaudeAdapter:
         # OAuth flow (Pro/Max and eligible Team/Enterprise plans).
         return {"DISABLE_AUTOUPDATER": "1"}
 
-    def _home(self, run_dir: Path) -> Path:
-        return run_dir / "claude"
-
     def seed(self, run_dir: Path, config: RunConfig) -> Volumes:
-        home = self._home(run_dir)
+        home = _home(run_dir)
         home.mkdir(parents=True, exist_ok=True)
         # Claude writes project session JSONL under ~/.claude/projects. Mounting
         # this per-run directory makes traces recoverable and keeps consecutive
@@ -166,7 +171,7 @@ class ClaudeAdapter:
         return volumes
 
     def parse_trace(self, run_dir: Path) -> dict[str, Any]:
-        return _parse_trace(self._home(run_dir))
+        return _parse_trace(_home(run_dir))
 
     def start_command(self, config: RunConfig) -> str:
         return shlex.join(["claude", "--model", config.model.name]) if config.model.name else "claude"
@@ -187,12 +192,43 @@ class ClaudeAdapter:
         return []
 
 
+def _home(run_dir: Path) -> Path:
+    return run_dir / "claude"
+
+
+def _session_files(home: Path) -> list[tuple[Path, list[_Entry]]]:
+    files = []
+    for path in sorted((home / "projects").glob("**/*.jsonl")):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        source = str(path.relative_to(home))
+        files.append((path, [(record, source, n) for n, record in enumerate(json_lines(text), start=1)]))
+    return files
+
+
+def _usage_ledger(entries: list[_Entry]) -> _ResponseLedger:
+    ledger: _ResponseLedger = {}
+    for entry in entries:
+        _record_usage(ledger, *entry)
+    return ledger
+
+
+def _tool_results(entries: list[_Entry]) -> dict[str, tuple[str, bool]]:
+    return {
+        str(block["tool_use_id"]): (_extract_text(block.get("content")), bool(block.get("is_error")))
+        for record, _, _ in entries
+        for block in _blocks(record)
+        if block.get("type") == "tool_result" and block.get("tool_use_id")
+    }
+
+
 def _parse_trace(home: Path) -> dict[str, Any]:
-    session_files = sorted((home / "projects").glob("**/*.jsonl"))
     sessions = []
     responses: _ResponseLedger = {}
-    for path in session_files:
-        parsed = _parse_session(path, str(path.relative_to(home)))
+    for path, entries in _session_files(home):
+        parsed = _parse_session(path, entries)
         if parsed is None:
             continue
         session, session_responses = parsed
@@ -225,36 +261,21 @@ def _trace_totals(
 
 
 def _parse_session(
-    path: Path, source: str,
+    path: Path, entries: list[_Entry],
 ) -> tuple[dict[str, Any], _ResponseLedger] | None:
-    records: list[dict[str, Any]] = []
-    responses: _ResponseLedger = {}
-    try:
-        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(record, dict):
-                records.append(record)
-                _record_usage(responses, record, source, line_number)
-    except OSError:
-        return None
-
+    records = [record for record, _, _ in entries]
     if not records:
         return None
-
+    responses = _usage_ledger(entries)
+    results = _tool_results(entries)
     messages: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
-    tool_results: dict[str, dict[str, Any]] = {}
-
     for record in records:
         message = record.get("message")
         if not isinstance(message, dict):
             continue
         role = message.get("role")
-        content = message.get("content")
-        text = _extract_message_text(content)
+        text = _extract_message_text(message.get("content"))
         if role in {"user", "assistant"} and text:
             messages.append(
                 {
@@ -264,29 +285,12 @@ def _parse_session(
                     "uuid": record.get("uuid"),
                 }
             )
-        if isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_use":
-                    tool_calls.append(
-                        {
-                            "id": block.get("id"),
-                            "name": block.get("name"),
-                            "args": block.get("input"),
-                        }
-                    )
-                elif block.get("type") == "tool_result" and block.get("tool_use_id"):
-                    tool_results[str(block["tool_use_id"])] = {
-                        "content": _extract_text(block.get("content")),
-                        "is_error": bool(block.get("is_error", False)),
-                    }
-
-    for call in tool_calls:
-        result = tool_results.get(str(call.get("id")))
-        if result is not None:
-            call["result"] = result["content"]
-            call["is_error"] = result["is_error"]
+        for block in _blocks(record):
+            if block.get("type") == "tool_use":
+                call = {"id": block.get("id"), "name": block.get("name"), "args": block.get("input")}
+                if (result := results.get(str(block.get("id")))) is not None:
+                    call["result"], call["is_error"] = result
+                tool_calls.append(call)
 
     timestamps = sorted(
         ts for ts in (r.get("timestamp") for r in records) if isinstance(ts, str)
@@ -365,29 +369,21 @@ def _response_identity(record: dict[str, Any], source: str, line_number: int) ->
 
 
 def _trace_events(home: Path) -> list[dict[str, Any]]:
-    records: list[tuple[dict[str, Any], str, int]] = []
+    entries: list[_Entry] = []
     seen: set[str] = set()
-    for path in sorted((home / "projects").glob("**/*.jsonl")):
-        source = str(path.relative_to(home))
-        for line_number, record in enumerate(json_lines(path.read_text(errors="replace")), start=1):
-            uuid = record.get("uuid")
+    for _, file_entries in _session_files(home):
+        for entry in file_entries:
+            uuid = entry[0].get("uuid")
             if isinstance(uuid, str):
                 if uuid in seen:
                     continue
                 seen.add(uuid)
-            records.append((record, source, line_number))
+            entries.append(entry)
+    ledger, results = _usage_ledger(entries), _tool_results(entries)
 
-    ledger: _ResponseLedger = {}
-    results: dict[str, tuple[str, bool]] = {}
-    for record, source, line_number in records:
-        _record_usage(ledger, record, source, line_number)
-        for block in _blocks(record):
-            if block.get("type") == "tool_result" and block.get("tool_use_id"):
-                results[str(block["tool_use_id"])] = (_extract_text(block.get("content")), bool(block.get("is_error")))
-
-    items: list[dict[str, Any]] = []
-    responses: dict[_ResponseId, dict[str, Any]] = {}
-    for record, source, line_number in records:
+    items: list[dict[str, Any] | _Response] = []
+    responses: dict[_ResponseId, _Response] = {}
+    for record, source, line_number in entries:
         kind, message = record.get("type"), record.get("message")
         header = (
             record.get("sessionId"),
@@ -407,15 +403,15 @@ def _trace_events(home: Path) -> list[dict[str, Any]]:
         elif kind == "assistant":
             identity = _response_identity(record, source, line_number)
             if identity not in responses:
-                responses[identity] = {"identity": identity, "header": header, "message": message, "blocks": []}
+                responses[identity] = _Response(identity, header, message)
                 items.append(responses[identity])
-            blocks = responses[identity]["blocks"]
+            blocks = responses[identity].blocks
             blocks += [block for block in _blocks(record) if block not in blocks]
 
     timed: list[tuple[str, dict[str, Any]]] = []
     last = ""
     for item in items:
-        for trace_event in _response_events(item, ledger, results) if "blocks" in item else [item]:
+        for trace_event in _response_events(item, ledger, results) if isinstance(item, _Response) else [item]:
             last = trace_event["ts"] or last
             timed.append((last, trace_event))
     return [trace_event for _, trace_event in sorted(timed, key=lambda pair: pair[0])]
@@ -428,9 +424,9 @@ def _blocks(record: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _response_events(
-    response: dict[str, Any], ledger: _ResponseLedger, results: dict[str, tuple[str, bool]]
+    response: _Response, ledger: _ResponseLedger, results: dict[str, tuple[str, bool]]
 ) -> list[dict[str, Any]]:
-    header, message, blocks = response["header"], response["message"], response["blocks"]
+    header, message, blocks = response.header, response.message, response.blocks
 
     def joined(kind: str, key: str) -> str:
         return "\n".join(b[key] for b in blocks if b.get("type") == kind and isinstance(b.get(key), str) and b[key])
@@ -445,7 +441,7 @@ def _response_events(
                 "tool_call", *header, id=block.get("id"), tool=str(block.get("name")),
                 input=tool_input if isinstance(tool_input, (dict, str)) else {}, output=output, is_error=is_error,
             ))
-    usage = ledger.get(response["identity"])
+    usage = ledger.get(response.identity)
     if usage and message.get("model") != "<synthetic>":
         counters = usage.counters
         events.append(event(
@@ -482,19 +478,10 @@ def _usage_summary(responses: _ResponseLedger) -> dict[str, Any]:
 
 
 def _wall_clock_seconds(started_at: str | None, ended_at: str | None) -> float | None:
-    start, end = _parse_ts(started_at), _parse_ts(ended_at)
+    start, end = parse_ts(started_at), parse_ts(ended_at)
     if start is None or end is None:
         return None
     return (end - start).total_seconds()
-
-
-def _parse_ts(value: str | None) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def _extract_text(content: Any) -> str:
