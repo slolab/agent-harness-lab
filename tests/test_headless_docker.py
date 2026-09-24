@@ -49,7 +49,7 @@ def stub_run(processes: list[subprocess.Popen], project: Path, turn: str, *flags
         [sys.executable, str(STUB), "run", "-c", "config.yaml", "--turn", "prompt.md",
          "--env-file", "keys.env", "--no-build", *flags],
         cwd=project, env={**os.environ, "AHL_STUB_TURN": turn}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True,
+        text=True, start_new_session=True,
     )
     processes.append(process)
     return process
@@ -69,14 +69,19 @@ def container_state(name: str) -> str | None:
 
 def test_a2_ac3_timeout_and_killed_runs_leave_no_blocking_container(project, leftovers):
     processes, containers = leftovers
-    code, output = finished(stub_run(processes, project, "sleep 60", "--name", "slow", "--timeout", "5"))
-
-    assert code == 124, output
+    slow = stub_run(processes, project, "sleep 60", "--name", "slow", "--timeout", "5")
+    printed = next((line for line in slow.stdout if line.startswith("Turn 1:")), "")
     run = project / "runs/slow"
+    container, deadline = json.loads((run / "session.json").read_text())["container"], time.monotonic() + 60
+    while container_state(container) is not None and time.monotonic() < deadline:
+        os.killpg(slow.pid, signal.SIGINT)
+    code, output = finished(slow)
+
+    assert code == 124, printed + output
     outcome = json.loads((run / "result.json").read_text())
     assert (outcome["status"], outcome["reason"]["code"]) == ("timeout", "timeout")
     assert [(t["status"], t["reason"]["code"]) for t in outcome["turns"]] == [("timeout", "timeout")]
-    assert container_state(json.loads((run / "session.json").read_text())["container"]) is None
+    assert container_state(container) is None and "is gone" not in output
 
     killed = stub_run(processes, project, "sleep 300", "--runs-dir", "first", "--name", "r")
     session, deadline = project / "first/r/session.json", time.monotonic() + 180

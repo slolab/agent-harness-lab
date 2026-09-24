@@ -4,7 +4,10 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,37 +36,76 @@ class TurnOutcome:
     message: str | None = None
 
 
+class Interrupts:
+    # Ctrl-C raises only inside interruptible(), which wraps the waits on Docker, the harness and the
+    # key. Elsewhere it is counted and raised when the next interruptible() starts, so recording,
+    # cleanup and result.json always finish.
+    def __init__(self) -> None:
+        self.count = 0
+        self._handled = 0
+        self._raising = False
+
+    @contextmanager
+    def installed(self) -> Iterator[None]:
+        previous = signal.signal(signal.SIGINT, self._handle)
+        try:
+            yield
+        finally:
+            signal.signal(signal.SIGINT, previous)
+
+    @contextmanager
+    def interruptible(self) -> Iterator[None]:
+        if self._handled < self.count:
+            self._handled = self.count
+            raise KeyboardInterrupt
+        self._raising = True
+        try:
+            yield
+        finally:
+            self._raising = False
+
+    def _handle(self, signum: int, frame: object) -> None:
+        self.count += 1
+        if self._raising:
+            self._handled = self.count
+            raise KeyboardInterrupt
+
+
 def run_headless(
-    run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None, interrupted: bool
+    run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None, interrupts: Interrupts
 ) -> int:
-    return _HeadlessRun(run, turn_files, timeout, interrupted).execute(failure)
+    return _HeadlessRun(run, turn_files, timeout, failure, interrupts).execute()
 
 
 class _HeadlessRun:
-    def __init__(self, run: PreparedRun, turn_files: list[Path], timeout: float, interrupted: bool) -> None:
+    def __init__(
+        self, run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None, interrupts: Interrupts
+    ) -> None:
         self.run = run
         self.driver = run.adapter.driver
         self.timeout = timeout
+        self.failure = failure
+        self.interrupts = interrupts
         self.key = provider_key(run.config) if run.config.provider.name == "openrouter" else None
         self.turns = [self._record(index, path) for index, path in enumerate(turn_files, start=1)]
         self.warnings: list[dict[str, Any]] = []
-        self.interrupted = interrupted
 
-    def execute(self, failure: str | None) -> int:
-        started = failure is None and not self.interrupted
-        try:
-            if started:
-                failure = self._start()
-            session_id = None
-            for turn in self.turns if started and failure is None else []:
-                session_id = self._turn(turn, session_id) or session_id
-                if turn["status"] != "completed" or self.interrupted:
-                    break
-        except KeyboardInterrupt:
-            self.interrupted = True
-        if started:
+    def execute(self) -> int:
+        interrupted = self.interrupts.count > 0
+        if self.failure is None and not interrupted:
+            try:
+                with self.interrupts.interruptible():
+                    self.failure = self._start()
+                if self.failure is None:
+                    session_id = None
+                    for turn in self.turns:
+                        session_id = self._turn(turn, session_id) or session_id
+                        if turn["status"] != "completed":
+                            break
+            except KeyboardInterrupt:
+                interrupted = True
             self._teardown()
-        status, reason = self._settle_statuses(failure)
+        status, reason = self._settle_statuses(interrupted)
         events = self._write_traces()
         (self.run.dir / "result.json").write_text(json.dumps(self._result(status, reason, events), indent=2))
         code = f" ({reason['code']})" if reason else ""
@@ -99,18 +141,21 @@ class _HeadlessRun:
 
     def _turn(self, turn: dict[str, Any], session_id: str | None) -> str | None:
         index, directory = turn["index"], self.run.dir / "turns" / str(turn["index"])
-        before = keyusage.read(self.key) if self.key else None
+        with self.interrupts.interruptible():
+            before = keyusage.read(self.key) if self.key else None
         command = [
             "docker", "exec", "-i", "-w", CONTAINER_WORKSPACE, self.run.container,
             *self.driver.command(self.run.config, session_id),
         ]
         started, exit_code, outcome = datetime.now(timezone.utc), None, None
         turn["started_at"] = started.isoformat()
+        interrupted = TurnOutcome("interrupted", "interrupted", f"turn {index} was interrupted")
         try:
             with (
                 (directory / "prompt.md").open("rb") as stdin,
                 (directory / "stdout.jsonl").open("wb") as stdout,
                 (directory / "stderr.log").open("wb") as stderr,
+                self.interrupts.interruptible(),
             ):
                 exit_code = subprocess.run(
                     command, stdin=stdin, stdout=stdout, stderr=stderr, timeout=self.timeout, check=False
@@ -118,13 +163,20 @@ class _HeadlessRun:
         except subprocess.TimeoutExpired:
             outcome = TurnOutcome("timeout", "timeout", f"turn {index} exceeded --timeout {self.timeout:g} seconds")
         except KeyboardInterrupt:
-            outcome = TurnOutcome("interrupted", "interrupted", f"turn {index} was interrupted")
+            outcome = interrupted
         ended = datetime.now(timezone.utc)
+        if outcome is not None:
+            self._in_container("kill -KILL -1")
         report = self.driver.report((directory / "stdout.jsonl").read_text(errors="replace"))
         if outcome is None:
             outcome = self._classify(exit_code, report, (directory / "stderr.log").read_text(errors="replace"))
-        else:
-            self._in_container("kill -KILL -1")
+        if self.key:
+            measured = keyusage.after_turn(self.key, before, self.interrupts.interruptible)
+            if measured.interrupted and outcome.status not in ("timeout", "interrupted"):
+                outcome = interrupted
+            turn["key_usage"] = measured.key_usage
+            if measured.warning:
+                self.warnings.append({"code": measured.warning, "turn": index, "message": WARNINGS[measured.warning]})
         turn.update(
             ended_at=ended.isoformat(),
             wall_clock_seconds=round((ended - started).total_seconds(), 3),
@@ -133,12 +185,6 @@ class _HeadlessRun:
             reason={"code": outcome.reason, "message": outcome.message} if outcome.reason else None,
             session_id=report.session_id,
         )
-        if self.key:
-            measured = keyusage.after_turn(self.key, before)
-            turn["key_usage"] = measured.key_usage
-            self.interrupted = measured.interrupted
-            if measured.warning:
-                self.warnings.append({"code": measured.warning, "turn": index, "message": WARNINGS[measured.warning]})
         typer.echo(f"Turn {index}: {outcome.status}{f' ({outcome.reason})' if outcome.reason else ''}")
         return turn["session_id"]
 
@@ -159,15 +205,11 @@ class _HeadlessRun:
         return TurnOutcome("completed")
 
     def _running(self) -> bool:
-        result = subprocess.run(
-            ["docker", "container", "inspect", "--format", "{{.State.Running}}", self.run.container],
-            capture_output=True, text=True, check=False,
-        )
+        result = _docker("container", "inspect", "--format", "{{.State.Running}}", self.run.container)
         return result.returncode == 0 and result.stdout.strip() == "true"
 
     def _in_container(self, script: str) -> bool:
-        result = subprocess.run(["docker", "exec", self.run.container, "sh", "-c", script], capture_output=True, check=False)
-        return result.returncode == 0
+        return _docker("exec", self.run.container, "sh", "-c", script).returncode == 0
 
     def _teardown(self) -> None:
         owner = f"{os.getuid()}:{os.getgid()}"
@@ -179,22 +221,21 @@ class _HeadlessRun:
                 "may belong to root",
                 err=True,
             )
-        subprocess.run(["docker", "rm", "-f", self.run.container], capture_output=True, check=False)
+        _docker("rm", "-f", self.run.container)
 
-    def _settle_statuses(self, failure: str | None) -> tuple[str, dict[str, str] | None]:
+    def _settle_statuses(self, interrupted: bool) -> tuple[str, dict[str, str] | None]:
         pending = [turn for turn in self.turns if turn["status"] is None]
+        if interrupted and pending:
+            first = pending.pop(0)
+            first.update(status="interrupted", reason={"code": "interrupted", "message": f"turn {first['index']} was interrupted"})
         stopped = next((turn for turn in self.turns if turn["status"] not in (None, "completed")), None)
-        if self.interrupted and pending and failure is None and stopped is None:
-            stopped = pending.pop(0)
-            message = f"turn {stopped['index']} was interrupted"
-            stopped.update(status="interrupted", reason={"code": "interrupted", "message": message})
         cause = f"turn {stopped['index']} {stopped['status']}" if stopped else "the run failed before turn 1"
         for turn in pending:
             turn.update(status="skipped", reason={"code": "skipped_after_failure", "message": cause})
-        if failure is not None:
-            return "error", {"code": "infra", "message": failure}
         if stopped:
             return stopped["status"], stopped["reason"]
+        if self.failure is not None:
+            return "error", {"code": "infra", "message": self.failure}
         return "completed", None
 
     def _write_traces(self) -> list[dict[str, Any]] | None:
@@ -232,3 +273,8 @@ class _HeadlessRun:
             },
             "warnings": self.warnings,
         }
+
+
+def _docker(*args: str) -> subprocess.CompletedProcess:
+    # Its own session keeps the terminal's Ctrl-C from killing a cleanup command halfway.
+    return subprocess.run(["docker", *args], capture_output=True, text=True, check=False, start_new_session=True)

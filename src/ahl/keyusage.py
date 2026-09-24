@@ -4,6 +4,8 @@ import json
 import time
 import urllib.request
 from datetime import datetime, timezone
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Any, NamedTuple
 
 KEY_URL = "https://openrouter.ai/api/v1/key"
@@ -29,32 +31,33 @@ def read(key: str) -> dict[str, Any] | None:
     return {"usd": float(usd), "at": datetime.now(timezone.utc).isoformat()}
 
 
-def after_turn(key: str, before: dict[str, Any] | None) -> AfterTurn:
-    last = previous = None
-    settled = failed = interrupted = False
+def after_turn(
+    key: str, before: dict[str, Any] | None, interruptible: Callable[[], AbstractContextManager[Any]]
+) -> AfterTurn:
+    readings = [read(key)]
     deadline = time.monotonic() + WAIT_SECONDS
+    interrupted = False
     try:
-        while True:
-            reading = read(key)
-            if reading is None:
-                failed = True
-                break
-            previous, last = last, reading
-            risen = before is not None and last["usd"] > before["usd"]
-            if before is None or (risen and previous and previous["usd"] == last["usd"]):
-                settled = risen
-                break
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(POLL_SECONDS)
+        with interruptible():
+            while before and readings[-1] and not _settled(before, readings) and time.monotonic() < deadline:
+                time.sleep(POLL_SECONDS)
+                readings.append(read(key))
     except KeyboardInterrupt:
         interrupted = True
+    last = next((reading for reading in reversed(readings) if reading), None)
+    failed = before is None or None in readings
     risen = before is not None and last is not None and last["usd"] > before["usd"]
     delta = round(last["usd"] - before["usd"], 10) if risen and not failed else None
     warning = None
-    if failed or before is None:
+    if failed:
         warning = "usage_read_failed"
     elif not risen:
         warning = "usage_not_updated"
-    after = {**last, "settled": settled} if last else None
+    after = {**last, "settled": _settled(before, readings)} if last else None
     return AfterTurn({"before": before, "after": after, "delta_usd": delta}, warning, interrupted)
+
+
+def _settled(before: dict[str, Any] | None, readings: list[dict[str, Any] | None]) -> bool:
+    if before is None or len(readings) < 2 or None in readings[-2:]:
+        return False
+    return readings[-2]["usd"] == readings[-1]["usd"] > before["usd"]

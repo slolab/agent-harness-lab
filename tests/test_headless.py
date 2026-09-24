@@ -12,7 +12,8 @@ import yaml
 from typer.testing import CliRunner
 
 from ahl import cli
-from conftest import Turn
+from ahl import runs as prepare
+from conftest import Turn, interrupt
 
 STATUS = Path(__file__).parent / "fixtures/a2/status"
 CLAUDE = {"harness": "claude", "provider": "openrouter", "model": "anthropic/claude-sonnet-5"}
@@ -59,6 +60,14 @@ def prompts(tmp_path: Path, count: int) -> list[str]:
 
 def load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
+
+
+def interrupting(function):
+    def interrupted(*args, **kwargs):
+        interrupt()
+        return function(*args, **kwargs)
+
+    return interrupted
 
 
 def container_env(args: list[str]) -> dict[str, str]:
@@ -136,20 +145,26 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
         ("completed", [Turn(stdout=ok)] * 3, {}, 0, ["completed"] * 3, None),
         ("failed", [Turn(stdout=ok), Turn(exit_code=1, stdout=error)], {}, 1,
          ["completed", "failed", "skipped"], ("failed", "harness_exit")),
-        ("timeout", [Turn(raises=subprocess.TimeoutExpired("claude", 5))], {}, 124,
+        ("timeout", [Turn(raises=subprocess.TimeoutExpired("claude", 5))], {"sigints": ["kill -KILL -1"]}, 124,
          ["timeout", "skipped", "skipped"], ("timeout", "timeout")),
-        ("interrupted", [Turn(raises=KeyboardInterrupt())], {}, 130,
+        ("interrupted", [Turn(effect=interrupt, interrupt_wait=True)], {}, 130,
          ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
-        ("infra", [], {"build": 1}, 3, ["skipped"] * 3, ("error", "infra")),
-        ("interrupted-build", [], {"build": KeyboardInterrupt()}, 130,
+        ("interrupted-wait", [Turn(stdout=ok), Turn(stdout=ok), Turn(stdout=ok, interrupt_wait=True)], {}, 130,
+         ["completed", "completed", "interrupted"], ("interrupted", "interrupted")),
+        ("infra", [], {"failing": {"build": 1}}, 3, ["skipped"] * 3, ("error", "infra")),
+        ("interrupted-build", [], {"sigints": ["docker build"]}, 130,
          ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
+        ("interrupted-prepare", [], {}, 130, ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
     ]
-    for name, scripted, failing, code, statuses, run_reason in scenarios:
-        docker.turns, docker.failing = list(scripted), failing
-        docker.interrupted_sleeps = int(name == "interrupted")
-        build = [] if failing else ["--no-build"]
+    for name, scripted, stub, code, statuses, run_reason in scenarios:
+        docker.turns = list(scripted)
+        docker.failing, docker.sigints = stub.get("failing", {}), stub.get("sigints", [])
+        build = [] if name in ("infra", "interrupted-build") else ["--no-build"]
 
-        result = ahl("run", "-c", config, *turns, *build, "--name", name)
+        with monkeypatch.context() as patch:
+            if name == "interrupted-prepare":
+                patch.setattr(prepare, "resolve_workspace", interrupting(prepare.resolve_workspace))
+            result = ahl("run", "-c", config, *turns, *build, "--name", name)
 
         assert result.exit_code == code, (name, result.output)
         run = tmp_path / "runs" / name
@@ -178,8 +193,8 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
                 assert {k for k, v in turn.items() if v is not None} == {
                     "index", "prompt_file", "prompt_sha256", "status", "reason",
                 }
-        if name == "interrupted":
-            after = outcome["turns"][0]["key_usage"]
+        if name in ("timeout", "interrupted", "interrupted-wait"):
+            after = outcome["turns"][len(scripted) - 1]["key_usage"]
             assert after["after"]["settled"] is False and after["delta_usd"] == pytest.approx(0.01)
         assert {outcome["totals"][k] for k in ("input_tokens", "output_tokens", "cache_read_tokens")} == {0}
 

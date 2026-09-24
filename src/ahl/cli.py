@@ -24,7 +24,7 @@ from ahl.config import (
 )
 from ahl.docker import CONTAINER_WORKSPACE, IMAGES_DIR, docker_daemon_unreachable, dockerfile_path, image_name
 from ahl.harnesses import get_adapter
-from ahl.headless import run_headless
+from ahl.headless import Interrupts, run_headless
 from ahl.runs import PreparedRun, prepare_run, start_container, write_native_trace
 
 app = typer.Typer(no_args_is_help=True)
@@ -150,16 +150,19 @@ def run(
     run_dir = _run_dir(run_config, runs_dir, name)
     _check_new(run_dir, "choose another --name")
     failure = image = None
-    interrupted = False
-    try:
-        image = _docker_setup(run_config, build, config)
-    except typer.Exit as exc:
-        failure = f"Docker setup failed before turn 1 with exit code {exc.exit_code}; see stderr"
-    except KeyboardInterrupt:
-        interrupted = True
-    _claim(run_dir, "choose another --name")
-    prepared = _prepare(run_config, run_dir, image, resume=False, headless=True)
-    raise typer.Exit(run_headless(prepared, turn, timeout, failure, interrupted))
+    interrupts = Interrupts()
+    with interrupts.installed():
+        try:
+            with interrupts.interruptible():
+                image = _docker_setup(run_config, build, config)
+        except typer.Exit as exc:
+            failure = f"Docker setup failed before turn 1 with exit code {exc.exit_code}; see stderr"
+        except KeyboardInterrupt:
+            pass
+        _claim(run_dir, "choose another --name")
+        prepared = _prepare(run_config, run_dir, image, resume=False, headless=True)
+        code = run_headless(prepared, turn, timeout, failure, interrupts)
+    raise typer.Exit(code)
 
 
 def _load(config: Path, env_file: Path | None) -> RunConfig:

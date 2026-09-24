@@ -98,6 +98,13 @@ assistant message. `provider_error`: the output shows a provider or API error
 such as HTTP 429 or 5xx (best effort). Skipped turns have
 `skipped_after_failure`.
 
+Ctrl-C (SIGINT) interrupts the image build, the container start, a turn and
+the key-usage wait after a turn. The turn then ends as `interrupted` unless it
+timed out, and a Ctrl-C before turn 1 starts marks turn 1 `interrupted`.
+Stopping the harness, recording the turn, handing files to the caller,
+removing the container and writing the run directory always finish; a Ctrl-C
+during them only ends a following usage wait early.
+
 Every terminal state except exit 2 leaves:
 
 ```
@@ -121,9 +128,9 @@ Every terminal state except exit 2 leaves:
   and after each started turn. After a turn AHL polls every 10 s for up to
   120 s until the usage has risen and two readings agree (`settled: true`).
   A usage that never rises gives `delta_usd: null` and the warning
-  `usage_not_updated`; a failed read gives `usage_read_failed`. A second
-  Ctrl-C ends the wait. `totals.cost_usd_key_delta` is null if any started
-  turn's delta is null.
+  `usage_not_updated`; a failed read gives `usage_read_failed`. A Ctrl-C
+  ends the wait after one reading (`settled: false`).
+  `totals.cost_usd_key_delta` is null if any started turn's delta is null.
 - `trace.jsonl` is one normalized event per line for every harness; see
   [the trace schema](docs/trace-schema.md).
 - `session.json` adds `"mode": "headless"`. Both `ahl run` and `ahl up`

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import signal
 import subprocess
 import time
 import urllib.request
@@ -28,6 +30,10 @@ def provider_keys_restored(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(key)
 
 
+def interrupt() -> None:
+    os.kill(os.getpid(), signal.SIGINT)
+
+
 def unpinned_build_labels(harness: str) -> dict[str, str]:
     package = HARNESS_NPM_PACKAGES.get(harness)
     return {"ahl.harness": harness} | ({"ahl.harness.version": NPM_RELEASES[package]} if package else {})
@@ -40,6 +46,7 @@ class Turn:
     stderr: str = ""
     raises: BaseException | None = None
     effect: Callable[[], None] | None = None
+    interrupt_wait: bool = False
 
 
 @dataclass
@@ -54,7 +61,8 @@ class DockerStub:
     turns: list[Turn] = field(default_factory=list)
     prompts: list[bytes] = field(default_factory=list)
     timeouts: list[float | None] = field(default_factory=list)
-    failing: dict[str, int | BaseException] = field(default_factory=dict)
+    failing: dict[str, int] = field(default_factory=dict)
+    sigints: list[str] = field(default_factory=list)
     running: bool = True
     usage: list[float | Exception] = field(default_factory=list)
     usage_reads: list[float | None] = field(default_factory=list)
@@ -70,10 +78,10 @@ class DockerStub:
                 raise subprocess.CalledProcessError(1, args)
             return subprocess.CompletedProcess(args, 1, "", "error: pathspec did not match any file(s) known to git")
         self.calls.append(args)
+        if any(pattern in " ".join(args) for pattern in self.sigints):
+            interrupt()
         if args[1] in self.failing:
             code = self.failing[args[1]]
-            if isinstance(code, BaseException):
-                raise code
             if kwargs.get("check"):
                 raise subprocess.CalledProcessError(code, args, "", "Error response from daemon: stubbed failure")
             return subprocess.CompletedProcess(args, code, "", "Error response from daemon: stubbed failure")
@@ -99,6 +107,7 @@ class DockerStub:
         self.reads_at_turn.append(len(self.usage_reads))
         self.prompts.append(kwargs["stdin"].read())
         self.timeouts.append(kwargs.get("timeout"))
+        self.interrupted_sleeps += turn.interrupt_wait
         if turn.effect:
             turn.effect()
         kwargs["stdout"].write(turn.stdout.encode())
@@ -130,7 +139,7 @@ class DockerStub:
     def sleep(self, seconds: float) -> None:
         if self.interrupted_sleeps:
             self.interrupted_sleeps -= 1
-            raise KeyboardInterrupt
+            interrupt()
         self.clock += seconds
 
     def monotonic(self) -> float:
