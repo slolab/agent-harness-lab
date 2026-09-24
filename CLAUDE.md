@@ -124,6 +124,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 
 - Every milestone has a spec in `docs/specs/<id>-<slug>.md`. Vlad approves it by merging it to `main`, and from then on it is frozen.
 - Implement the spec as written. **Never weaken, drop or reinterpret an acceptance criterion to make progress.**
+- The binding parts of a spec are its goal, scope, non-goals, interfaces and acceptance criteria. Its design sketch is guidance only: depart from it when the code shows a better way, and say why in the PR. That needs no spec change.
 - The implementer never edits a spec. If a criterion is wrong, impossible or far harder than expected, post a PR comment starting with your role tag and `BLOCKED on AC-n`, for example `🤖 claude-implementer: BLOCKED on AC-3`, with the evidence and the options you see, and stop work on that criterion.
 - The orchestrator takes the question to Vlad. Only after Vlad approves a change in a PR comment does the orchestrator commit it, in its own commit prefixed `spec-change:`, with the reason and the URL of Vlad's approving comment in the commit message.
 - Findings outside the spec become new GitHub issues, not extra scope.
