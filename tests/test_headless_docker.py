@@ -108,7 +108,7 @@ def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project, lef
     config = yaml.safe_load((project / "config.yaml").read_text())
     config["mounts"] = [
         {"path": "external/ro", "target": "/workspace/data"},
-        {"path": "external/rw", "target": "/workspace/shared", "readonly": False},
+        {"path": "external/rw", "target": "/workspace/shared[1]", "readonly": False},
     ]
     (project / "config.yaml").write_text(yaml.safe_dump(config))
     writes = (
@@ -116,7 +116,7 @@ def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project, lef
         " && echo x > /workspace/out/deep/file && ln -s /workspace/out /workspace/link"
         " && echo y > /root/.config/opencode/state.json && touch /root/.local/share/opencode/cache/entry"
         " && chmod 700 /workspace/out /root/.local/share/opencode/cache && chmod 600 /workspace/out/deep/file"
-        " && chown 12345:12345 /workspace/shared/theirs"
+        " && mkdir /workspace/shared1 && touch /workspace/shared1/ours && chown 12345:12345 '/workspace/shared[1]/theirs'"
     )
     code, output = finished(stub_run(leftovers[0], project, writes, "--name", "owned"))
 
@@ -124,7 +124,8 @@ def test_a2_ac4_files_written_in_the_container_belong_to_the_caller(project, lef
     run = project / "runs/owned"
     assert (run / "workspace/out/deep/file").read_text() == "x\n"
     assert (run / "opencode/data/cache/entry").is_file() and (run / "workspace/link").is_symlink()
-    assert (run / "workspace/data").is_dir() and (run / "workspace/shared").is_dir()
+    assert (run / "workspace/data").is_dir() and (run / "workspace/shared[1]").is_dir()
+    assert (run / "workspace/shared1/ours").is_file()
     assert (project / "external/rw/theirs").stat().st_uid == 12345
     owners = {(p.lstat().st_uid, p.lstat().st_gid) for p in [run, *run.rglob("*")]}
     assert owners == {(os.getuid(), os.getgid())}

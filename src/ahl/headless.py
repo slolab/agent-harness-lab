@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -213,7 +214,7 @@ class _HeadlessRun:
 
     def _teardown(self) -> None:
         owner = f"{os.getuid()}:{os.getgid()}"
-        external = [arg for _, target in self.run.external_mounts for arg in ("-o", "-path", target)][1:]
+        external = [arg for _, target in self.run.external_mounts for arg in ("-o", "-path", _literal(target))][1:]
         chown = shlex.join([
             "find", *(target for _, target in self.run.writable_mounts),
             *(["(", *external, ")", "-prune", "-o"] if external else []), "-exec", "chown", "-h", owner, "{}", "+",
@@ -279,6 +280,10 @@ class _HeadlessRun:
             },
             "warnings": self.warnings,
         }
+
+
+def _literal(path: str) -> str:
+    return re.sub(r"[\\*?[]", r"\\\g<0>", path)
 
 
 def _docker(*args: str) -> subprocess.CompletedProcess:
