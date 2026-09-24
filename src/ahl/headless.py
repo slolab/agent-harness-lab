@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ import typer
 
 from ahl import keyusage
 from ahl.docker import CONTAINER_WORKSPACE, docker_daemon_unreachable
-from ahl.harnesses.base import TurnOutcome, provider_key
+from ahl.harnesses.base import TurnReport, provider_key
 from ahl.runs import PreparedRun, start_container
 from ahl.trace import token_totals, write_trace
 
@@ -22,6 +23,13 @@ WARNINGS = {
     "usage_not_updated": "OpenRouter key usage did not rise after the turn",
     "usage_read_failed": "OpenRouter key usage could not be read",
 }
+
+
+@dataclass(frozen=True)
+class TurnOutcome:
+    status: str
+    reason: str | None = None
+    message: str | None = None
 
 
 def run_headless(
@@ -114,9 +122,9 @@ class _HeadlessRun:
         except KeyboardInterrupt:
             outcome = TurnOutcome("interrupted", "interrupted", f"turn {index} was interrupted")
         ended = datetime.now(timezone.utc)
-        stdout_text = (directory / "stdout.jsonl").read_text(errors="replace")
+        report = self.driver.report((directory / "stdout.jsonl").read_text(errors="replace"))
         if outcome is None:
-            outcome = self._classify(exit_code, stdout_text, (directory / "stderr.log").read_text(errors="replace"))
+            outcome = self._classify(exit_code, report, (directory / "stderr.log").read_text(errors="replace"))
         else:
             self._in_container("kill -KILL -1")
         turn.update(
@@ -125,7 +133,7 @@ class _HeadlessRun:
             exit_code=exit_code,
             status=outcome.status,
             reason={"code": outcome.reason, "message": outcome.message} if outcome.reason else None,
-            session_id=self.driver.session_id(stdout_text),
+            session_id=report.session_id,
         )
         if self.key:
             measured = keyusage.after_turn(self.key, before)
@@ -136,12 +144,21 @@ class _HeadlessRun:
         typer.echo(f"Turn {index}: {outcome.status}{f' ({outcome.reason})' if outcome.reason else ''}")
         return turn["session_id"]
 
-    def _classify(self, exit_code: int, stdout: str, stderr: str) -> TurnOutcome:
+    def _classify(self, exit_code: int, report: TurnReport, stderr: str) -> TurnOutcome:
         daemon = "error response from daemon" in stderr.lower() or docker_daemon_unreachable(stderr)
         if exit_code in (125, 126, 127) or daemon or (exit_code and not self._running()):
             detail = next((line for line in reversed(stderr.splitlines()) if line.strip()), "")[:300]
             return TurnOutcome("error", "infra", f"docker exec exited with code {exit_code}" + (f": {detail}" if detail else ""))
-        return self.driver.outcome(exit_code, stdout)
+        harness = self.run.config.harness.name
+        provider = "provider_error" if report.provider_error else None
+        if exit_code:
+            detail = f": {report.error}" if report.error else ""
+            return TurnOutcome("failed", provider or "harness_exit", f"{harness} exited with code {exit_code}{detail}")
+        if report.error is not None:
+            return TurnOutcome("failed", provider or "harness_reported_error", report.error)
+        if not report.replied:
+            return TurnOutcome("failed", "no_assistant_output", f"{harness} produced no assistant message")
+        return TurnOutcome("completed")
 
     def _running(self) -> bool:
         result = subprocess.run(

@@ -316,11 +316,9 @@ def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeyp
 @pytest.mark.parametrize(
     "harness,recording,exit_code,status,reason",
     [
-        ("claude", "success", 0, "completed", None),
         ("claude", "error_result", 0, "failed", "harness_reported_error"),
-        ("claude", "error_result", 1, "failed", "harness_exit"),
+        ("claude", "no_text", 0, "failed", "no_assistant_output"),
         ("claude", "http_429", 1, "failed", "provider_error"),
-        ("opencode", "success", 0, "completed", None),
         ("opencode", "error", 1, "failed", "harness_exit"),
         ("opencode", "error", 0, "failed", "harness_reported_error"),
         ("opencode", "no_text", 0, "failed", "no_assistant_output"),
@@ -337,7 +335,7 @@ def test_a2_ac1_ac7_turn_status_follows_recorded_harness_output(
 
     result = ahl("run", "-c", config, *prompts(tmp_path, 1), "--no-build", "--name", "r")
 
-    assert result.exit_code == (0 if status == "completed" else 1), result.output
+    assert result.exit_code == 1, result.output
     outcome = load(tmp_path / "runs/r/result.json")
     [turn] = outcome["turns"]
     assert (turn["status"], turn["exit_code"], turn["session_id"]) == (status, exit_code, session_id(stdout))

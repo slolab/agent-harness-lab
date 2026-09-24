@@ -22,18 +22,18 @@ from ahl.permissions import PermissionHandler
 
 
 @dataclass(frozen=True)
-class TurnOutcome:
-    status: str
-    reason: str | None = None
-    message: str | None = None
+class TurnReport:
+    session_id: str | None
+    error: str | None
+    provider_error: bool
+    replied: bool
 
 
 class HeadlessDriver(Protocol):
     def applied_model_parameters(self, config: RunConfig) -> frozenset[str]: ...
     def env(self, config: RunConfig) -> dict[str, str]: ...
     def command(self, config: RunConfig, session_id: str | None) -> list[str]: ...
-    def session_id(self, stdout: str) -> str | None: ...
-    def outcome(self, exit_code: int, stdout: str) -> TurnOutcome: ...
+    def report(self, stdout: str) -> TurnReport: ...
     def trace(self, run_dir: Path) -> list[dict[str, Any]]: ...
 
 

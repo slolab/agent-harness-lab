@@ -13,7 +13,7 @@ from ahl.capabilities import Capability
 from ahl.config import RunConfig
 from ahl.permissions import PermissionPolicy, PermissionSetup
 from ahl.harnesses.base import (
-    TurnOutcome,
+    TurnReport,
     Volumes,
     json_lines,
     native_skill_mount,
@@ -100,25 +100,21 @@ class ClaudeDriver:
             command += ["--model", config.model.name]
         return [*command, "--resume", session_id] if session_id else command
 
-    def session_id(self, stdout: str) -> str | None:
-        ids = [e["session_id"] for e in json_lines(stdout) if isinstance(e.get("session_id"), str)]
-        return ids[-1] if ids else None
-
-    def outcome(self, exit_code: int, stdout: str) -> TurnOutcome:
+    def report(self, stdout: str) -> TurnReport:
         events = json_lines(stdout)
         result = next((e for e in reversed(events) if e.get("type") == "result"), {})
-        provider = result.get("terminal_reason") == "api_error" or result.get("api_error_status") is not None
+        ids = [e["session_id"] for e in events if isinstance(e.get("session_id"), str)]
         detail = result.get("result") or "; ".join(map(str, result.get("errors") or []))
-        if exit_code:
-            message = f"claude exited with code {exit_code}" + (f": {detail}" if detail else "")
-            return TurnOutcome("failed", "provider_error" if provider else "harness_exit", message)
-        if result.get("is_error"):
-            reason = "provider_error" if provider else "harness_reported_error"
-            return TurnOutcome("failed", reason, detail or f"claude reported {result.get('subtype')}")
-        replies = [e["message"] for e in events if e.get("type") == "assistant" and isinstance(e.get("message"), dict)]
-        if not any(_extract_message_text(reply.get("content")).strip() for reply in replies):
-            return TurnOutcome("failed", "no_assistant_output", "claude produced no assistant message")
-        return TurnOutcome("completed")
+        return TurnReport(
+            session_id=ids[-1] if ids else None,
+            error=(detail or f"claude reported {result.get('subtype')}") if result.get("is_error") else None,
+            provider_error=result.get("terminal_reason") == "api_error" or result.get("api_error_status") is not None,
+            replied=any(
+                _extract_message_text(e["message"].get("content")).strip()
+                for e in events
+                if e.get("type") == "assistant" and isinstance(e.get("message"), dict)
+            ),
+        )
 
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
         return _trace_events(run_dir / "claude")

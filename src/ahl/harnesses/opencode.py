@@ -13,7 +13,7 @@ from typing import Any
 from ahl.capabilities import Capability
 from ahl.config import ConfigError, RunConfig
 from ahl.harnesses.base import (
-    TurnOutcome,
+    TurnReport,
     Volumes,
     json_lines,
     native_skill_mount,
@@ -70,22 +70,15 @@ class OpenCodeDriver:
         command = ["opencode", "run", "--format", "json", "-m", model_id(config)]
         return [*command, "--session", session_id] if session_id else command
 
-    def session_id(self, stdout: str) -> str | None:
-        return next((e["sessionID"] for e in json_lines(stdout) if isinstance(e.get("sessionID"), str)), None)
-
-    def outcome(self, exit_code: int, stdout: str) -> TurnOutcome:
+    def report(self, stdout: str) -> TurnReport:
         events = json_lines(stdout)
         errors = [e.get("error") for e in events if e.get("type") == "error"]
-        detail = "; ".join(_error_message(error) for error in errors)
-        provider = any(isinstance(error, dict) and error.get("name") == "APIError" for error in errors)
-        if exit_code:
-            message = f"opencode exited with code {exit_code}" + (f": {detail}" if detail else "")
-            return TurnOutcome("failed", "provider_error" if provider else "harness_exit", message)
-        if errors:
-            return TurnOutcome("failed", "provider_error" if provider else "harness_reported_error", detail)
-        if not any(e.get("type") == "text" and (e.get("part") or {}).get("text", "").strip() for e in events):
-            return TurnOutcome("failed", "no_assistant_output", "opencode produced no assistant message")
-        return TurnOutcome("completed")
+        return TurnReport(
+            session_id=next((e["sessionID"] for e in events if isinstance(e.get("sessionID"), str)), None),
+            error="; ".join(_error_message(error) for error in errors) if errors else None,
+            provider_error=any(isinstance(error, dict) and error.get("name") == "APIError" for error in errors),
+            replied=any(e.get("type") == "text" and (e.get("part") or {}).get("text", "").strip() for e in events),
+        )
 
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
         return _trace_events(_data_dir(run_dir) / "opencode.db")

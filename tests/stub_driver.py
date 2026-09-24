@@ -2,7 +2,7 @@ import os
 
 from ahl import cli
 from ahl.harnesses import get_adapter
-from ahl.harnesses.base import TurnOutcome
+from ahl.harnesses.base import TurnReport
 
 
 class StubDriver:
@@ -15,13 +15,8 @@ class StubDriver:
     def command(self, config, session_id):
         return ["sh", "-c", os.environ["AHL_STUB_TURN"]]
 
-    def session_id(self, stdout):
-        return None
-
-    def outcome(self, exit_code, stdout):
-        if exit_code:
-            return TurnOutcome("failed", "harness_exit", f"stub exited with code {exit_code}")
-        return TurnOutcome("completed")
+    def report(self, stdout):
+        return TurnReport(session_id=None, error=None, provider_error=False, replied=True)
 
     def trace(self, run_dir):
         return []
