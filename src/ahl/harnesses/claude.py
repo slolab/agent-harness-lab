@@ -345,8 +345,11 @@ def _record_usage(
     cache = usage.get("cache_creation")
     if not isinstance(cache, dict):
         cache = {}
+    details = usage.get("output_tokens_details")
+    if not isinstance(details, dict):
+        details = {}
     counters = {}
-    for fields, values in ((USAGE_FIELDS, usage), (CACHE_USAGE_FIELDS, cache)):
+    for fields, values in ((USAGE_FIELDS, usage), (CACHE_USAGE_FIELDS, cache), (("thinking_tokens",), details)):
         for name in fields:
             value = values.get(name)
             if type(value) is int and value >= 0:
@@ -450,7 +453,7 @@ def _response_events(
             input_tokens=counters.get("input_tokens"), output_tokens=counters.get("output_tokens"),
             cache_read_tokens=counters.get("cache_read_input_tokens"),
             cache_write_tokens=counters.get("cache_creation_input_tokens"),
-            reasoning_tokens=None, cost_usd=None,
+            reasoning_tokens=counters.get("thinking_tokens"), cost_usd=None,
         ))
     return events
 

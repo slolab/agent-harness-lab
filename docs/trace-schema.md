@@ -89,8 +89,9 @@ Subagent records carry `isSidechain` and an `agentId`, which becomes `agent`.
 - Tokens: `input_tokens` = `input_tokens`, `cache_read_tokens` =
   `cache_read_input_tokens`, `cache_write_tokens` =
   `cache_creation_input_tokens`, `output_tokens` = `output_tokens`, which
-  already includes thinking. `reasoning_tokens` and `cost_usd` are null:
-  Claude Code records neither per response.
+  already includes thinking, `reasoning_tokens` =
+  `output_tokens_details.thinking_tokens`. `cost_usd` is null: Claude Code
+  records no cost per response.
 - `response_id` is `message.id`.
 
 ## OpenCode
