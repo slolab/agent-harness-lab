@@ -131,8 +131,6 @@ def up(
         readonly_volumes += permissions.readonly_volumes
         readonly_volumes += skill_volumes
         readonly_volumes += package_volumes
-        readonly_volumes += [(m.path, m.target) for m in run_config.mounts if m.readonly]
-        extra_volumes += [(m.path, m.target) for m in run_config.mounts if not m.readonly]
         setup_commands = skill_commands + package_commands
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -170,6 +168,8 @@ def up(
         typer.echo(f"Mount: {host} -> {container}")
     for host, container in readonly_volumes:
         typer.echo(f"Mount: {host} -> {container} (ro)")
+    for mount in run_config.mounts:
+        typer.echo(f"Mount: {mount.path} -> {mount.target}{' (ro)' if mount.readonly else ''}")
     for copy in package_copies:
         typer.echo(f"Copy: {copy.host_path} -> {copy.container_path}")
     for cmd in setup_commands:

@@ -89,6 +89,8 @@ def docker_run_args(
         args.extend(["--name", name])
     if config.network:
         args.extend(["--network", config.network])
+    for mount in config.mounts:
+        args.extend(["-v", f"{mount.path}:{mount.target}{':ro' if mount.readonly else ''}"])
     for host, container in extra_volumes or []:
         args.extend(["-v", f"{host}:{container}"])
     for host, container in readonly_volumes or []:
