@@ -2,351 +2,130 @@
 
 Repo: slolab/agent-harness-lab · Needs: A1 · Roadmap decisions: 1, 2, 5, 7, 10, 11 ([roadmap](https://github.com/slolab/biotope-bench/blob/main/docs/roadmap.md))
 
-## Goal
+## Goal and why
 
-`ahl run` executes a harness session without a human. It takes one or more prompt files, runs each as a turn in the same native session, and exits with a meaningful code. It leaves the raw harness output, a normalized trace in one schema for every harness, and a `result.json` with status, reason, timings and the OpenRouter cost of each turn. Claude Code and OpenCode get headless drivers. `ahl up` keeps working as the interactive shell.
+Callers such as biotope-bench run many harness sessions unattended and compare them across harnesses. `ahl up` needs a human at the shell. After A2, `ahl run` runs one or more prompt files as turns of one native session and exits with a code a script can act on. It leaves the raw harness output, a trace in one schema for every harness, and a `result.json` with status, reason, timings, tokens and the OpenRouter cost of each turn. Claude Code and OpenCode get headless drivers. `ahl up` stays the interactive shell.
 
 ## Scope
 
-- The `ahl run` command, its run-directory layout and its exit codes.
-- Unique container names, for `ahl run` and `ahl up`.
-- Returning ownership of the run directory to the calling user after `ahl run`.
-- An optional headless-driver part of the adapter protocol.
-- Drivers for Claude Code and OpenCode.
-- A normalized trace (`trace.jsonl`), its schema and its token definitions.
-- `result.json`, including cost from the OpenRouter key's usage.
-- Mapping web-tool denials onto OpenCode's permissions.
-- OpenRouter provider routing for OpenCode.
+- `ahl run`: flags, exit codes, run directory, `result.json` with key-based cost, and new `session.json` fields. Unique container names, also for `ahl up`, and teardown in every terminal state.
+- A normalized `trace.jsonl` with a JSON Schema and token definitions.
+- Headless drivers for Claude Code and OpenCode, including OpenCode web denial and OpenRouter provider routing.
 
 ## Non-goals
 
 - Codex (A3), and headless drivers for Gemini, agy, Claude Science and DeepSeek.
-- Parallel sessions, retries and batch orchestration. Callers such as biotope-bench do these.
-- Budget caps. Per-turn wall-clock timeouts are in scope; spending limits are not.
-- Parsing traces live while a session runs.
-- Restricting network egress.
-- Truncating trace content. AHL writes full tool outputs.
-- Fixing file ownership after `ahl up`.
+- Parallel sessions, retries, batch orchestration and budget caps. Callers do these.
+- Parsing traces while a session runs, restricting egress, truncating trace content, and fixing file ownership after `ahl up`.
 
-## Design and interfaces
+## Interfaces
 
-### Command
+**Command.** `ahl run -c CONFIG --turn FILE [--turn FILE …] [--env-file PATH] [--runs-dir DIR] [--name NAME] [--timeout SECONDS] [--build/--no-build]`
 
-```
-ahl run -c CONFIG --turn FILE [--turn FILE ...]
-        [--env-file PATH] [--runs-dir DIR] [--name NAME]
-        [--timeout SECONDS] [--build/--no-build]
-```
+- Turn *n* is the *n*-th `--turn` file, delivered to the harness byte for byte. `--timeout` applies to each turn; the default is 3600.
+- `--env-file`, `--runs-dir`, `--name`, `--build` and path resolution behave as in `ahl up` (A1). A `--name` whose run directory exists, and a harness without a headless driver, are usage errors (exit 2).
 
-- `--turn` is repeatable and required at least once. Turn *n* is the *n*-th file. AHL delivers the file's bytes unchanged.
-- `--timeout` applies to each turn. The default is 3600.
-- `--env-file`, `--runs-dir`, `--name` and `--build` behave as in `ahl up` (A1). Command-line paths, including `--turn`, resolve against the current working directory (A1).
-- A `--name` whose run directory already exists is a usage error (exit 2).
+**Exit codes.** After a turn that does not complete, the remaining turns are skipped. When several rows apply, precedence is timeout, interrupted, error, failed.
 
-**Exit codes**
+| Exit | Run `status` | Reason codes | When |
+|---|---|---|---|
+| 0 | `completed` | — | Every turn completed |
+| 1 | `failed` | `harness_exit`, `harness_reported_error`, `no_assistant_output`, `provider_error` | The harness failed in a turn |
+| 2 | — | — | Config or usage error. No `result.json` is written |
+| 3 | `error` | `infra` | Image build or container start failed, `docker exec` exited 125–127, the Docker daemon reported an error, or the container is gone |
+| 124 | `timeout` | `timeout` | A turn exceeded `--timeout` |
+| 130 | `interrupted` | `interrupted` | Ctrl-C (SIGINT) |
 
-| Code | Run status | Meaning |
-|---|---|---|
-| 0 | `completed` | Every turn completed |
-| 1 | `failed` | The harness failed in a turn, including provider errors. Later turns are skipped |
-| 2 | — | Config or usage error, including a harness without a headless driver. No `result.json` is written |
-| 3 | `error` | Infrastructure error. Later turns are skipped |
-| 124 | `timeout` | A turn exceeded `--timeout`. Later turns are skipped |
-| 130 | `interrupted` | Interrupted with Ctrl-C. Later turns are skipped |
+`harness_exit`: the harness exited non-zero. `harness_reported_error`: it exited 0 but reported an error. `no_assistant_output`: the turn produced no assistant message. `provider_error`: the output shows a provider or API error such as HTTP 429 or 5xx. Provider-error detection is best effort; a missed one is reported under the other codes.
 
-**Turn outcome.** The first matching rule decides:
-
-- The turn exceeded `--timeout`: `timeout`, exit 124.
-- Ctrl-C: `interrupted`, exit 130.
-- `docker exec` exited 125, 126 or 127, the Docker daemon reported an error, or the container is no longer running: `error` with reason `infra`, exit 3. Image build and container start failures are also `infra`.
-- The driver reports the turn as failed: `failed`, exit 1. The reason code is `provider_error` when the driver finds a provider or API error in the harness output (HTTP 429 or 5xx, rate limit). This detection is best effort and driver-specific. Otherwise the code is `harness_exit`, `harness_reported_error` or `no_assistant_output`, as the driver reports.
-
-### Execution
-
-1. Prepare the run exactly as `ahl up` does: config, run dir, workspace, seeding, permissions, capabilities, packages. Copy every turn file to `turns/<n>/prompt.md`.
-2. Start the container detached (`sleep infinity`), then run setup commands with `docker exec`.
-3. For each turn, run the driver's command with `docker exec -i`. AHL writes `turns/<n>/prompt.md` to its stdin, and captures stdout to `turns/<n>/stdout.jsonl` and stderr to `turns/<n>/stderr.log`.
-   - A turn that exceeds the timeout is killed.
-   - Turn 2 onwards resume the native session id returned by turn 1.
-   - After a turn that did not complete, the remaining turns are not run.
-4. Teardown runs in every terminal state, including failure, timeout, infrastructure error and Ctrl-C:
-   - finish the key-usage read after the last started turn (see "Key usage");
-   - `docker exec <container> chown -R <uid>:<gid>` over every read-write mount under the run directory, with the calling user's uid and gid, so the caller can delete the run directory without root. On macOS this is harmless. If the container is already gone, AHL prints a warning instead;
-   - remove the container.
-5. Parse traces and write `result.json`, in every terminal state except exit 2.
-
-### Container name
-
-- `ahl run` and `ahl up` name the container `ahl-<run id>-<8 random hex chars>`, and record the name in `session.json` as `container`.
-- A container left over from an earlier invocation never blocks a new run.
-
-### Run directory
+**Run directory.** Written in every terminal state except exit 2. Its files end up owned by the calling user; if the container is already gone, AHL prints a warning instead.
 
 ```
 <run dir>/
-  session.json        as for ahl up, plus "mode": "headless"
-  result.json
-  trace.json          existing native parse (unchanged format)
-  trace.jsonl         normalized events (schema below)
-  turns/<n>/prompt.md       copy of the turn file, for every turn
-  turns/<n>/stdout.jsonl    raw harness stdout, for every started turn
-  turns/<n>/stderr.log      for every started turn
-  workspace/ …        as today
+  session.json   result.json   trace.jsonl   trace.json (native parse, format unchanged)
+  turns/<n>/prompt.md                            copy of every turn file
+  turns/<n>/stdout.jsonl, turns/<n>/stderr.log   raw output of every started turn
+  <harness home>/  workspace/                    native harness state, and the workspace, as today
 ```
 
-`session.json` also gains, for `ahl up` and `ahl run`:
+**`session.json`** keeps A1's fields, adds `"mode": "headless"` in `ahl run`, and adds for both `ahl run` and `ahl up`:
 
-- `container`: the container name;
-- `model_parameters`: `{"unsupported": [...]}`, listing configured `model.parameters` keys the harness could not apply. Empty when all were applied.
+- `container`: the Docker container name, unique per invocation. AHL removes the container in every terminal state, and a leftover container never blocks a new run. If AHL is killed with SIGKILL, the container may keep running, and `docker rm -f <container>` removes it.
+- `permissions.applied`: the existing field, now also listing OpenCode's web denials.
+- `model_parameters.unsupported`: configured `model.parameters` keys the harness cannot apply, e.g. `["provider"]`; empty when all were applied. Each also prints a warning; the run goes on.
 
-### Driver protocol
+**`result.json`**
 
-This is an optional part of `HarnessAdapter`, defined in `src/ahl/harnesses/base.py`. Adapters without a driver make `ahl run` exit 2 with a message naming the harness. The exact method names are left to the implementer. The driver must provide:
+```json
+{"run_id": "…", "harness": "opencode", "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
+ "status": "failed", "reason": {"code": "harness_exit", "message": "opencode exited with code 1"}, "session_id": "…",
+ "turns": [
+   {"index": 1, "prompt_file": "turns/1/prompt.md", "prompt_sha256": "…", "started_at": "…", "ended_at": "…",
+    "wall_clock_seconds": 812.4, "exit_code": 0, "status": "completed", "reason": null, "session_id": "…",
+    "key_usage": {"before": {"usd": 12.3456, "at": "…"}, "after": {"usd": 12.4012, "at": "…", "settled": true}, "delta_usd": 0.0556}},
+   {"index": 2, "…": "…", "exit_code": 1, "status": "failed", "reason": {"code": "harness_exit", "message": "…"}},
+   {"index": 3, "prompt_file": "turns/3/prompt.md", "prompt_sha256": "…", "status": "skipped",
+    "reason": {"code": "skipped_after_failure", "message": "turn 2 failed"}, "started_at": null, "…": null}],
+ "totals": {"wall_clock_seconds": 1210.7, "cost_usd_key_delta": 0.0731, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
+ "warnings": []}
+```
 
-- the command for a turn, given the session id to resume (`None` for turn 1). The prompt arrives on stdin;
-- the extra environment for headless mode;
-- the native session id, extracted from a turn's output or from harness state;
-- the turn's status (`completed` or `failed`) and, when failed, the reason code, from its exit code and output;
-- the parser from the harness's native files to `trace.jsonl` events.
+- Turn `status` is `completed`, `failed`, `timeout`, `error`, `interrupted` or `skipped`. The run's `status` and `reason` are those of the first turn that did not complete, or `completed` and null. A failure before turn 1 makes the run `error` with `infra`, and every turn `skipped`.
+- `reason` is null exactly when the status is `completed`, otherwise `{code, message}` with a code from the table, or `skipped_after_failure` for a skipped turn. `message` is free text. Every turn is listed; a skipped turn has null in every field except `index`, `prompt_file`, `prompt_sha256`, `status` and `reason`.
+- `key_usage` (only for `provider: openrouter`, otherwise null) holds readings of the key's cumulative usage before and after each started turn, in every terminal state. After a turn, AHL waits a bounded time for the usage to settle: risen above `before`, with two consecutive readings equal.
+  - Settled: `settled: true` and `delta_usd = after − before`. Risen but not settled, or the wait ended by a second Ctrl-C: `settled: false`, delta from the last reading.
+  - Never rose: `delta_usd: null`, `settled: false`, warning `usage_not_updated`. A failed read: `delta_usd: null`, warning `usage_read_failed`. Neither fails the run.
+- `totals.cost_usd_key_delta` sums the started turns' deltas, and is null if any is null. Each token total sums that field over the `usage` events in `trace.jsonl`; it is null if any event has null there, and 0 without `usage` events.
+- `warnings` entries are `{code, turn, message}`; `turn` is null for run-level warnings.
 
-### Claude Code driver
-
-- **Command:** `claude -p --output-format stream-json --verbose --model <model> --disallowedTools AskUserQuestion` plus permission bypass, and `--resume <session id>` from turn 2 onwards. The prompt arrives on stdin.
-  - `--bare` is **not** used, because it disables skills.
-- **Model aliases:** for `provider: openrouter`, set `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to the configured model, alongside the existing variables. Without this, background and subagent calls could go to a different model.
-- **Running as root:** containers run as root, and Claude Code refuses `--dangerously-skip-permissions` as root outside a recognised sandbox.
-  - First try `IS_SANDBOX=1`.
-  - If that does not work, use managed-settings allow rules covering every tool with `--permission-mode dontAsk`.
-  - Either way, the result must be a session that runs tools without prompts. Record which mechanism was used in the PR.
-- **Session id:** from the `system/init` or `result` event.
-- **Status:** a turn is `completed` when the exit code is 0 and the `result` event has `is_error: false`. A non-zero exit gives `harness_exit`. Exit 0 with `is_error: true` gives `harness_reported_error`. Either becomes `provider_error` when the output shows a provider or API error.
-- **Provider routing:** Claude Code cannot pass OpenRouter's `provider` body field. A configured `model.parameters.provider` prints a warning and is listed in `model_parameters.unsupported`.
-
-### OpenCode driver
-
-- **Command:** `opencode run --format json -m <model_id(config)>`, plus `--session <session id>` from turn 2 onwards, reusing the adapter's existing provider-aware `model_id(config)` (`src/ahl/harnesses/opencode.py`) rather than hardcoding `openrouter/<model>`. The prompt comes from stdin. If the pinned version does not read its message from stdin, the driver passes stdin as one argument inside the container (`sh -c 'exec opencode run … "$(cat)"'`).
-- **Permissions:** the seeded `opencode.json` sets each permission key of the pinned version explicitly, because behaviour on `ask` varies between versions. The adapter keeps that list of keys.
-  - All keys are `allow`, except `question` (the ask-the-user tool), which is `deny` in `ahl run`.
-  - A web deny from `permissions.deny` sets `webfetch` and `websearch` to `deny`. `session.json` lists them under `permissions.applied`.
-  - This seeding applies to `ahl up` as well. OpenCode web denials become supported there too.
-- **Small model:** `small_model` is set to `model_id(config)`, the same provider-aware id as `model`, so title and summary calls do not go to a second model or a different provider.
-- **Provider routing:** only when `provider: openrouter`. `model.parameters.provider` is copied verbatim into `provider.openrouter.models["<model>"].options.provider` in `opencode.json`. Example: `{"order": ["deepinfra"], "allow_fallbacks": false}`. With any other provider, no OpenRouter routing options are set.
-- **Status:** a turn is `failed` if the exit code is non-zero (`harness_exit`), an `error` event appears in stdout (`harness_reported_error`), or the turn produced no assistant message (`no_assistant_output`). Any of these becomes `provider_error` when the error shows a provider or API error. Otherwise the turn is `completed`.
-- **Usage source:** `opencode.db`, not stdout. `run --format json` can exit before its final `step_finish` event (opencode#26855). The current parser reads only session-level input and output totals from the `session` table. A2 extends it to read the `message` and `part` tables, with per-message tokens including cache reads and writes.
-- **Reasoning tokens:** the pinned OpenCode version stores billed output tokens excluding reasoning, with reasoning tokens in a separate field. A2's `output_tokens` is billed output *including* reasoning (see Token definitions below), so the parser adds them: `output_tokens = native output tokens + native reasoning tokens`, and `reasoning_tokens = native reasoning tokens`. `docs/trace-schema.md` documents this mapping for the pinned version.
-
-### Normalized trace (`trace.jsonl`)
-
-One JSON object per line, in order. The schema is a JSON Schema file at `src/ahl/schemas/trace_event.schema.json`, documented in `docs/trace-schema.md`. Unknown values are `null`, never guessed.
-
-**Source per harness.** Captured stdout is kept but is not the trace source.
-
-| Harness | Source |
-|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` in the run's Claude home, including subagent files |
-| OpenCode | `opencode.db`, `message` and `part` tables |
-| Codex (A3) | rollout JSONL files |
-
-**Fields common to every event:**
-
-| Field | Type | Meaning |
-|---|---|---|
-| `seq` | int | Position in the file, starting at 0 |
-| `type` | string | `message`, `tool_call`, `usage` or `error` |
-| `session` | string or null | Native session id |
-| `agent` | string | `"main"`, or a subagent id |
-| `turn` | int or null | AHL turn number (1-based) where attributable |
-| `ts` | string or null | ISO-8601 timestamp |
-
-- `turn` is assigned from each turn's `started_at` and `ended_at` in `result.json`, by the event's timestamp. An event without a timestamp takes the turn of the event before it.
-- `agent` is `"main"` for the main session. Events from a subagent's own file (Claude) or child session (OpenCode) carry that subagent's id.
-
-**Fields by event type:**
+**`trace.jsonl`.** One event per line. The JSON Schema ships in the package as `ahl/schemas/trace_event.schema.json`, and `docs/trace-schema.md` documents it. Unknown values are null, never guessed. Every event has `seq` (int from 0), `type`, `session` (native session id or null), `agent` (`"main"` or a subagent id), `turn` (AHL turn from 1, or null) and `ts` (ISO-8601 or null).
 
 | Type | Fields |
 |---|---|
-| `message` | `role` (`user`, `assistant` or `system`), `text` (string), `reasoning` (string or null) |
-| `tool_call` | `id` (string or null), `tool` (native tool name), `input` (object or string), `output` (string or null, full length), `is_error` (bool or null). Optional: `output_truncated` (bool), `output_original_length` (int) |
-| `usage` | `model` (string or null), `response_id` (string or null), `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` (each int or null), `cost_usd` (number or null, as the harness reports it) |
-| `error` | `message` (string) |
+| `message` | `role` (`user`, `assistant`, `system`), `text`, `reasoning` (string or null) |
+| `tool_call` | `id` (string or null), `tool` (native name), `input` (object or string), `output` (string or null), `is_error` (bool or null). Optional: `output_truncated` (bool), `output_original_length` (int) |
+| `usage` | `model`, `response_id` (string or null), `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` (int or null), `cost_usd` (number or null, as the harness reports it) |
+| `error` | `message` |
 
-- AHL never truncates and never writes `output_truncated` or `output_original_length`. The fields exist so that shortened copies of a trace made by callers still validate.
-- Each API response is counted once in the `usage` events. Claude responses are deduplicated as the existing Claude parser already does. OpenCode writes one `usage` event per assistant message, from the message's tokens, with `response_id` set to the OpenCode message id. One message can span several API calls; its tokens are not also counted from its parts.
-- The first `user` message of each turn contains that turn's prompt text with leading and trailing whitespace stripped. Harnesses may trim or wrap the prompt, so this is containment, not equality.
-
-**Token definitions.** Every parser converts to these, and `docs/trace-schema.md` documents them together with each harness's conversion:
-
-| Field | Meaning |
-|---|---|
-| `input_tokens` | Input tokens not served from cache and not written to cache |
-| `cache_read_tokens` | Input tokens served from cache |
-| `cache_write_tokens` | Input tokens written to cache |
-| `output_tokens` | Output tokens as billed |
-| `reasoning_tokens` | The reported reasoning subset of `output_tokens`, or null |
-
-Where a harness or provider counts cached tokens inside its input figure, the adapter subtracts them.
-
-### `result.json`
-
-```json
-{
-  "run_id": "…", "harness": "opencode", "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
-  "status": "failed",
-  "reason": {"code": "harness_exit", "message": "opencode exited with code 1"},
-  "session_id": "…",
-  "turns": [
-    {
-      "index": 1, "prompt_file": "turns/1/prompt.md", "prompt_sha256": "…",
-      "started_at": "…", "ended_at": "…", "wall_clock_seconds": 812.4,
-      "exit_code": 0, "status": "completed", "reason": null, "session_id": "…",
-      "key_usage": {
-        "before": {"usd": 12.3456, "at": "…"},
-        "after": {"usd": 12.4012, "at": "…", "settled": true},
-        "delta_usd": 0.0556
-      }
-    },
-    {
-      "index": 2, "prompt_file": "turns/2/prompt.md", "prompt_sha256": "…",
-      "started_at": "…", "ended_at": "…", "wall_clock_seconds": 398.3,
-      "exit_code": 1, "status": "failed", "session_id": "…",
-      "reason": {"code": "harness_exit", "message": "opencode exited with code 1"},
-      "key_usage": {
-        "before": {"usd": 12.4012, "at": "…"},
-        "after": {"usd": 12.4187, "at": "…", "settled": true},
-        "delta_usd": 0.0175
-      }
-    },
-    {
-      "index": 3, "prompt_file": "turns/3/prompt.md", "prompt_sha256": "…",
-      "started_at": null, "ended_at": null, "wall_clock_seconds": null,
-      "exit_code": null, "status": "skipped", "session_id": null, "key_usage": null,
-      "reason": {"code": "skipped_after_failure", "message": "turn 2 failed"}
-    }
-  ],
-  "totals": {
-    "wall_clock_seconds": 1210.7, "cost_usd_key_delta": 0.0731,
-    "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0
-  },
-  "warnings": []
-}
-```
-
-- **Status.** Turn `status` is one of `completed`, `failed`, `timeout`, `error`, `interrupted` or `skipped`. Run `status` is one of the first five.
-- **Reason.** Every turn and the run carry `reason`: `null` when completed, otherwise `{"code": "...", "message": "..."}`. The `message` is free text.
-
-  | Code | Status |
-  |---|---|
-  | `harness_exit` | `failed`: the harness exited non-zero |
-  | `harness_reported_error` | `failed`: the harness exited 0 but reported an error |
-  | `provider_error` | `failed`: the harness output shows a provider or API error |
-  | `no_assistant_output` | `failed`: the turn produced no assistant message |
-  | `timeout` | `timeout` |
-  | `infra` | `error` |
-  | `interrupted` | `interrupted` |
-  | `skipped_after_failure` | `skipped`: an earlier turn did not complete |
-
-- Every turn is listed. Turns that did not run have `status: skipped`; their fields other than `index`, `prompt_file`, `prompt_sha256`, `status` and `reason` are `null`.
-- The run's `status` and `reason` are those of the first turn that did not complete, or `completed` and `null`. A failure before the first turn (image build, container start) makes the run `error` with reason `infra`, and every turn `skipped`.
-- `warnings` lists non-fatal problems as `{"code": "...", "turn": n, "message": "..."}`, for example `usage_not_updated`. `turn` is null for run-level warnings.
-
-**Key usage** (only for `provider: openrouter`, otherwise `null`):
-
-- Read `data.usage` from `GET https://openrouter.ai/api/v1/key`, using the run's key, before each turn.
-- After each started turn, in every terminal state including failure, timeout and Ctrl-C, read it every 10 s for up to 120 s.
-  - Settled: the value is greater than `before` and two consecutive reads agree. Then `settled: true` and `delta_usd` is `after - before`.
-  - If the value never exceeds `before`: `delta_usd: null`, `settled: false`, warning `usage_not_updated`.
-  - If it exceeds `before` but never settles: `settled: false`, and `delta_usd` uses the last read.
-  - A second Ctrl-C during this wait stops it, with `settled: false`.
-- If a read fails, `delta_usd` is `null` and a `usage_read_failed` warning is recorded. The run does not fail because of it.
-- `totals.cost_usd_key_delta` is the sum of the started turns' deltas, and `null` if any of them is `null`.
-- Token totals are sums over the `usage` events in `trace.jsonl`. A total is `null` if any `usage` event has `null` in that field, and 0 if there are no `usage` events.
+- `turn` comes from the turn windows in `result.json` by timestamp; an event without one takes the previous event's turn. Each API response is counted once across `usage` events, subagents included. The first `user` message of a turn contains that turn's prompt, stripped of leading and trailing whitespace.
+- AHL writes full tool outputs and never writes `output_truncated` or `output_original_length`. They exist so that callers' shortened copies still validate.
+- **Token definitions.** `input_tokens`: input neither read from nor written to cache. `cache_read_tokens`, `cache_write_tokens`: input read from, or written to, cache. `output_tokens`: output as billed, reasoning included, also where the harness stores reasoning separately, as OpenCode does. `reasoning_tokens`: the reported reasoning subset of `output_tokens`, or null. `docs/trace-schema.md` documents each harness's conversion.
 
 ## Acceptance criteria
 
-- **AC-1** (unit) `ahl run` accepts the flags above with the stated defaults. A relative `--turn` path resolves against the working directory. Exit codes 0, 1, 2, 3, 124 and 130 occur for the matching situations, each with the run status from the table. A `--name` whose run directory exists exits 2. Docker is stubbed at the subprocess boundary.
-- **AC-2** (unit) Infrastructure versus harness failure, with `docker exec` stubbed:
-  - `docker exec` exit 125, 126 or 127, a daemon error, and a container that is no longer running each give exit 3 and reason `infra`;
-  - a harness exit code 1 gives exit 1 and reason `harness_exit`;
-  - a harness exit with an HTTP 429 error in its recorded output gives exit 1 and reason `provider_error`.
-- **AC-3** (unit) In every terminal state (completed, failed, timeout, error, interrupted), the run directory contains `session.json` (with `"mode": "headless"` and `container`), `result.json`, `trace.json`, `trace.jsonl`, `turns/<n>/prompt.md` for every turn, and `turns/<n>/{stdout.jsonl,stderr.log}` for each started turn. After exit 2, no `result.json` exists.
-- **AC-4** (unit) `result.json` status and reason:
-  - every turn and the run carry `status` and `reason`, with `reason` null exactly when the status is `completed`, and otherwise a code from the table;
-  - in a three-turn run whose turn 2 fails, turn 3 is listed with `status: skipped` and reason `skipped_after_failure`, and the run has turn 2's status and reason;
-  - SIGINT during a turn gives exit 130, `status: interrupted` and reason `interrupted` for that turn and the run, and `result.json` is written.
-- **AC-5** (docker) Timeout: a stub test driver whose turn outlasts `--timeout 5` makes `ahl run` exit 124. The container named in `session.json` no longer exists, and `result.json` shows `status: timeout` and reason `timeout` for that turn and for the run.
-- **AC-6** (docker) File ownership: after an `ahl run` whose stub driver writes files into the workspace and the harness home, every file and directory under the run directory is owned by the calling user's uid and gid, and `rm -rf <run dir>` as that user succeeds. Tested on Linux.
-- **AC-7** (unit, docker) Container names:
-  - unit tier: `ahl run` and `ahl up` name the container `ahl-<run id>-` plus 8 hex characters, record it in `session.json` as `container`, and two invocations with the same `--name` in different runs directories get different names;
-  - docker tier: an `ahl run --name r` killed with SIGKILL during a turn leaves its container running. A second `ahl run --name r` into another runs directory exits 0, and the first container still exists.
-- **AC-8** (unit) A harness without a headless driver makes `ahl run` exit 2 with a message naming the harness. `ahl up` behaves as before and the existing tests pass, with one stated change: the OpenCode case of `tests/test_permissions.py::test_unsupported_policy_warns_launches_and_records_gap` changes, because OpenCode now applies web denials.
-- **AC-9** (unit) Claude driver:
-  - the turn-1 command contains `-p`, `--output-format stream-json`, `--model <model>` and `--disallowedTools AskUserQuestion`, omits `--bare`, and has no prompt text in its arguments;
-  - the turn-2 command adds `--resume <id>`;
-  - with `provider: openrouter`, the environment sets all four model-alias variables to the configured model;
-  - a config with `model.parameters.provider` prints a warning, and `session.json` has `model_parameters.unsupported` equal to `["provider"]`.
-- **AC-10** (unit) OpenCode seeding:
-  - the seeded config sets every key in the adapter's permission list explicitly. In `ahl run` all are `allow` except `question`, which is `deny`;
-  - with `permissions.deny: [websearch, webfetch]` it sets `webfetch` and `websearch` to `deny`, and `session.json` lists both as applied;
-  - `small_model` equals `model_id(config)`;
-  - with `provider: openrouter`, `model.parameters.provider` appears verbatim in the config's OpenRouter model options, and `model_parameters.unsupported` is empty;
-  - with a non-OpenRouter provider, for example `anthropic`, the command and `opencode.json` use that provider's `model_id(config)` for `model` and `small_model`, and no OpenRouter routing options are set.
-- **AC-11** (unit) Driver status rules, on recorded outputs:
-  - Claude: exit 0 with `is_error: false` is `completed`; exit 0 with `is_error: true` is `failed` with `harness_reported_error`;
-  - OpenCode: a non-zero exit gives `harness_exit`; exit 0 with an `error` event gives `harness_reported_error`; exit 0 with no assistant message in `opencode.db` gives `no_assistant_output`; otherwise `completed`.
-- **AC-12** (live) A Claude Code two-turn smoke run on `anthropic/claude-sonnet-5` meets all of the following:
-  - turn 1's prompt contains a random nonce and asks the agent to remember it without writing it to disk, and to create a file with a tool. Turn 2 asks for the nonce;
-  - turn 2's assistant output contains the nonce;
-  - both turns report the same session id;
-  - both turns are `completed`, with no permission prompt or refusal while running as root;
-  - every `usage` event names the same model;
-  - `totals.cost_usd_key_delta` > 0.
-- **AC-13** (live) An OpenCode two-turn smoke run on `deepseek/deepseek-v4.1-flash` with a provider pin meets all of the following:
-  - the same nonce test as AC-12 passes;
-  - both turns report the same session id;
-  - `totals.cost_usd_key_delta` > 0;
-  - the token totals are non-zero and, after the output+reasoning conversion above, equal the sums of the per-message tokens in `opencode.db`.
-- **AC-14** (unit) Parsing the fixtures committed from the AC-12 and AC-13 runs:
-  - every line of `trace.jsonl` validates against the JSON Schema;
-  - the first `user` message of each turn contains that turn's prompt text with leading and trailing whitespace stripped;
-  - `tool_call` events carry their outputs;
-  - for one response per harness with cached input, the `usage` event's token fields equal values computed by hand under the token definitions;
-  - the OpenCode fixtures include one response with non-zero reasoning tokens, whose `usage` event's `output_tokens` and `reasoning_tokens` follow the mapping above.
-- **AC-15** (unit) Key-usage logic, tested with HTTP and the clock mocked:
-  - the delta is computed correctly;
-  - settling stops when the value exceeds `before` and two consecutive reads agree;
-  - a value that never exceeds `before` within 120 s gives `delta_usd: null`, `settled: false` and warning `usage_not_updated`;
-  - a failed read gives `delta_usd: null` and a warning, not a failed run;
-  - failed, timed-out and interrupted turns still get `key_usage.after`;
-  - `totals.cost_usd_key_delta` is `null` when one turn's delta is `null`;
-  - a non-OpenRouter provider gives `key_usage: null`.
-- **AC-16** (live) For both harnesses, the AC-12/AC-13 smoke scenario with an added instruction to ask the user a clarifying question completes within `--timeout`, without waiting for input, with evidence the model actually handled the prompt: `trace.jsonl` has at least one `assistant` message for the turn.
-  - `completed` passes.
-  - `failed` passes only when the reason names the question tool's denial (the disallowed/denied ask-user tool), not `provider_error`, `infra`, or a startup failure (missing key, image build, container start) — each of those fails the test.
-- **AC-17** (unit) `docs/trace-schema.md` documents the trace schema and the token definitions. A test checks that the schema file and the document list the same event types and fields.
+- **AC-1** (unit) With Docker stubbed, `ahl run` takes the flags above with their defaults, and a relative `--turn` resolves against the working directory. Each exit code arises in its situation with its run status and reason: `docker exec` exit 125–127, a daemon error and a vanished container each give 3 and `infra`; a harness exit 1 gives `harness_exit`; a recorded HTTP 429 gives `provider_error`. A taken `--name` and a harness without a driver give exit 2 and no `result.json`.
+- **AC-2** (unit) In every terminal state other than exit 2, the run directory holds the files above, and `session.json` has `mode`, `container` and `model_parameters`. Status and reason follow the rules above. A three-turn run whose turn 2 fails lists turn 3 as `skipped` with `skipped_after_failure`, and the run takes turn 2's status and reason. SIGINT during a turn gives exit 130, `interrupted` for that turn and the run, and a written `result.json`.
+- **AC-3** (unit, docker) Containers. Unit: `ahl run` and `ahl up` record the container name in `session.json`; two invocations with the same `--name` in different runs directories get different names; the container is removed in every terminal state. Docker, with a stub driver that calls no model: a turn outlasting `--timeout 5` exits 124 with `timeout` for the turn and the run, and the container named in `session.json` is gone. An `ahl run --name r` killed with SIGKILL mid-turn leaves its container running; a second `ahl run --name r` into another runs directory exits 0, and `docker rm -f` on the first run's recorded name removes the leftover.
+- **AC-4** (docker) After an `ahl run` whose stub driver writes into the workspace and the harness home, every file and directory under the run directory belongs to the calling user's uid and gid, and `rm -rf` of it as that user succeeds. Tested on Linux.
+- **AC-5** (unit) Key usage, with HTTP and the clock mocked: a settled delta is correct; the wait ends once the value has risen and settled; a value that never rises within the bound gives null, `settled: false` and `usage_not_updated`; a failed read gives null and `usage_read_failed` and the run still succeeds; failed, timed-out and interrupted turns get `after`; one null delta makes `totals.cost_usd_key_delta` null; a non-OpenRouter provider gives `key_usage: null`.
+- **AC-6** (unit) Driver setup, checked on the generated commands and seeded config:
+  - both harnesses: no session can wait for input, since tools run without permission prompts and the ask-user tool (Claude `AskUserQuestion`, OpenCode `question`) is denied; turn 2 resumes turn 1's session id;
+  - Claude: skills stay enabled; with `provider: openrouter` every model alias resolves to the configured model; `model.parameters.provider` gives a warning and `model_parameters.unsupported: ["provider"]`;
+  - OpenCode: the main and small model are the configured provider's model id, as `ahl up` uses it. With `provider: openrouter`, `model.parameters.provider` reaches OpenRouter's routing options verbatim and `unsupported` is empty; with another provider, e.g. `anthropic`, no OpenRouter routing is set;
+  - OpenCode `permissions.deny: [websearch, webfetch]` is applied in `ahl run` and `ahl up` and listed in `permissions.applied`. Existing `ahl up` tests pass, except the OpenCode case of `test_unsupported_policy_warns_launches_and_records_gap`, which changes for this reason.
+- **AC-7** (unit) Driver status on recorded outputs. Claude: exit 0 with a successful result is `completed`; exit 0 with an error result is `harness_reported_error`. OpenCode: non-zero exit gives `harness_exit`; exit 0 with an error event gives `harness_reported_error`; exit 0 with no assistant message gives `no_assistant_output`; otherwise `completed`.
+- **AC-8** (unit) On fixtures recorded by AC-9: every `trace.jsonl` line validates against the schema; each turn's first `user` message contains its prompt; `tool_call` events carry their outputs; for one cached response per harness, the token fields equal values computed by hand under the definitions; one OpenCode response with non-zero reasoning has `output_tokens` including it. No fixture contains `sk-or-`. The schema file and `docs/trace-schema.md` list the same event types and fields.
+- **AC-9** (live) Two-turn smoke runs: Claude Code on `anthropic/claude-sonnet-5`, and OpenCode on `deepseek/deepseek-v4.1-flash` with a provider pin. Turn 1 gives a random nonce to remember without writing it to disk, and asks for a file created with a tool; turn 2 asks for the nonce. For each: turn 2's assistant output contains the nonce; both turns report one session id and are `completed`; `totals.cost_usd_key_delta` > 0. Claude runs as root with no permission prompt or refusal, and every `usage` event names the same model. OpenCode's token totals are non-zero and equal the per-message sums in its database after the reasoning conversion.
+- **AC-10** (live) For both harnesses, the AC-9 scenario plus an instruction to ask the user a clarifying question ends within `--timeout` without waiting for input, and `trace.jsonl` has an `assistant` message for the turn. `completed` passes. `failed` passes only when the reason is the denial of the ask-user tool; `provider_error`, `infra` and startup failures fail the test.
 
-## Test plan
+## Freedom to operate
 
-- The unit tier stubs Docker at the `subprocess` boundary, like the `docker_stub` fixture in `tests/test_permissions.py`.
-- AC-5, AC-6 and AC-7 use a test-only stub driver registered through monkeypatch, so the docker tier exercises the real container lifecycle without calling a model.
-- The `docker` and `live` markers are registered by A1 and deselected by default.
-- The live tier (`@pytest.mark.live`) needs `OPENROUTER_API_KEY`. It records its raw outputs as fixtures under `tests/fixtures/headless/<harness>/`: the Claude project JSONL files, OpenCode's `opencode.db` as the SQLite file, stdout, stderr and `result.json`. The unit tier then replays those fixtures. A unit test asserts that no fixture file contains `sk-or-`.
+The driver protocol and its method names; how the prompt reaches the harness; the exact harness flags, environment and permission keys; which native files feed the trace and how they are parsed and deduplicated; the key-usage poll interval and bound; container name format; test layout, stub drivers and fixture format.
+
+## Design sketch (non-binding)
+
+- Run like `ahl up`, but start the container detached and `docker exec -i` each turn with the prompt on stdin. Teardown after every terminal state: final key read, `chown -R` of the run directory's read-write mounts to the caller from inside the container, container removal. Container name `ahl-<run id>-<8 hex>`.
+- Claude: `claude -p --output-format stream-json --verbose --model …`, `--disallowedTools AskUserQuestion`, `--resume` from turn 2, no `--bare` (it disables skills). Root: try `IS_SANDBOX=1`, else managed-settings allow rules with `--permission-mode dontAsk`. Aliases: `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`. Trace from the project JSONL files, subagents included.
+- OpenCode: `opencode run --format json -m <model_id(config)>`, `--session` from turn 2. Set every permission key of the pinned version explicitly, since `ask` behaviour varies. Usage from `opencode.db` (`message` and `part` tables), one `usage` event per assistant message, not from stdout (opencode#26855). Native output excludes reasoning.
+- Key usage: `GET https://openrouter.ai/api/v1/key` `data.usage`, e.g. every 10 s for up to 120 s.
 
 ## Risks and open questions
 
-- **Claude as root.** Whether `IS_SANDBOX=1` is honoured is unverified; the design above names the fallback.
-- **Claude through OpenRouter:**
-  - `result.total_cost_usd` is a local estimate and unreliable for non-Anthropic model ids. That is why cost comes from the key.
-  - OpenRouter guarantees Claude Code compatibility only for Anthropic models, which matches roadmap decision 1.
-- **OpenRouter usage lag.** Key usage may update with a delay. The settling rule is a best effort, and the raw readings are kept so callers can recompute.
-- **Provider error detection** reads harness output and is best effort. A provider error it misses is reported as `harness_exit` or `harness_reported_error`.
-- **OpenCode prompt as argument.** If the pinned OpenCode does not read stdin, the prompt becomes one argument, and Linux limits a single argument to 128 KiB.
-- **OpenCode headless quirks** differ between versions. Pin the version (A1) and test against that version only.
+- Whether Claude Code honours `IS_SANDBOX=1` as root is unverified. Its `total_cost_usd` is unreliable for non-Anthropic ids, which is why cost comes from the key. OpenRouter usage may lag; the settling rule is best effort, and raw readings are kept so callers can recompute.
+- If OpenCode cannot read the prompt from stdin, an argument is limited to 128 KiB on Linux. OpenCode's headless quirks vary by version; test only the pinned one.
 
 ## Evidence required in the PR
 
-- The Claude root mechanism used.
-- How the OpenCode driver receives the prompt (stdin or argument), and the permission keys listed for the pinned OpenCode version.
-- The AC-12, AC-13 and AC-16 commands, with abridged `result.json` and cost.
-- Output of `uv run pytest -m docker` covering AC-5 to AC-7.
-- The fixture files committed.
-- `README.md` documents `ahl run`, its exit codes, its status and reason codes, and its run directory.
+- The Claude root mechanism, how OpenCode receives the prompt, and the OpenCode permission keys used.
+- The AC-9 and AC-10 commands with abridged `result.json` and cost, the committed fixtures, and `uv run pytest -m docker` output for AC-3 and AC-4.
+- `README.md` documents `ahl run`, its exit codes, status and reason codes, and its run directory.

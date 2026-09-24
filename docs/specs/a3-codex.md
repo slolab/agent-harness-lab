@@ -2,113 +2,60 @@
 
 Repo: slolab/agent-harness-lab · Needs: A2 · Roadmap decisions: 1, 2, 10, 11 ([roadmap](https://github.com/slolab/biotope-bench/blob/main/docs/roadmap.md))
 
-## Goal
+## Goal and why
 
-AHL supports OpenAI's Codex CLI as a harness, authenticated through OpenRouter. It works interactively (`ahl up`) and headlessly (`ahl run`), with skills, web-tool denial, the normalized trace and key-based cost, on the same terms as Claude Code and OpenCode after A2.
+By roadmap decision 1, `openai/*` models run in OpenAI's own harness, Codex, and by decision 2 every model goes through one OpenRouter key. AHL has no Codex harness. After A3, AHL runs the Codex CLI through OpenRouter, interactively (`ahl up`) and headlessly (`ahl run`), with skills, web-tool denial, the normalized trace and key-based cost on the same terms as Claude Code and OpenCode after A2.
 
 ## Scope
 
-- A `codex` harness:
-  - Dockerfile, adapter and registry entry;
-  - config validation and seeding;
-  - skill wiring;
-  - native trace parsing;
-  - a headless driver;
-  - web-search denial.
+- A `codex` harness: image, config validation, seeding, skill wiring, web-search denial, a headless driver and trace parsing.
+- A live spike before the rest of the work: a resumed turn through OpenRouter that must recall a nonce, web search through OpenRouter, and the skill directory the pinned version reads.
 
 ## Non-goals
 
-- Codex with non-OpenAI models. By roadmap decision 1, Codex runs only `openai/*` models.
-- Codex through a direct OpenAI key or a ChatGPT login.
-- MCP wiring, which is still unimplemented for every harness.
-- OpenRouter provider routing for Codex.
+- Codex with non-OpenAI models, a direct OpenAI key or a ChatGPT login.
+- OpenRouter provider routing for Codex, and MCP wiring, which no harness has yet.
+- Switching to another API, provider or harness if Codex fails through OpenRouter. The implementer reports `BLOCKED on AC-n` instead.
 
-## Design and interfaces
+## Interfaces
 
-### Config
-
-- `harness: codex` requires `provider: openrouter` and an explicit `model`. Any other provider is rejected with a `ConfigError`.
-- Add `codex` to `SUPPORTED_HARNESSES`, the OpenRouter harness allow-list and the adapter registry.
-- A configured `model.parameters.provider` prints a warning and is listed in `session.json` under `model_parameters.unsupported` (A2).
-
-### Image
-
-- `src/ahl/images/codex.Dockerfile` installs `@openai/codex` at an exact version.
-- It follows the conventions of the other harness images: Node 22, uv, git, python3, `init-firewall.sh`.
-- It carries the labels `ahl.harness=codex` and `ahl.harness.version=<version>` (A1).
-
-### Seeding
-
-- A per-run home at `<run dir>/codex/`, mounted at `/root/.codex` (`CODEX_HOME`). It holds `config.toml`:
-  - `model` and `model_provider = "openrouter"`;
-  - `[model_providers.openrouter]` with `base_url = "https://openrouter.ai/api/v1"` and `wire_api = "responses"`;
-  - authentication read from `OPENROUTER_API_KEY`, using the method that avoids "Unknown model" fallback metadata (a command-based auth reading the environment);
-  - approvals and sandbox set so that headless runs never prompt. The container is the sandbox.
-- Exact key names follow the pinned Codex version's documentation. Record them in the PR.
-- **Stateless API.** OpenRouter's Responses API keeps no state and rejects `store: true` and `previous_response_id`, so Codex must send the full context each time. Current Codex versions have no config key for this. The requirement is behavioural: no request is rejected because of `store` or `previous_response_id`. The spike and AC-7 check it.
-
-### Skills and permissions
-
-- **Skills:** mount-mode skills go into the native user-skill directory of the pinned Codex version. Current docs name `~/.agents/skills` and treat `~/.codex/skills` as legacy; the spike confirms which directory the pinned version reads. `skills.py` gets Codex's agent identifier for delegated installs.
-- **Web denial:** `permissions.deny` containing `websearch` or `webfetch` disables Codex's web-search tool in `config.toml`. `session.json` lists the operations applied. If Codex has no separate fetch tool, `webfetch` is recorded as applied through the same switch; say which in the PR.
-- **Web search when allowed:** Codex's web search is a hosted tool. The spike checks whether it works through OpenRouter's Responses API. If it does not, the README says that Codex has no web search through OpenRouter, and the PR records the evidence.
-
-### Headless driver
-
-- The prompt arrives on stdin (A2), passed to Codex as `-`.
-- **Turn 1:** `codex exec --json --skip-git-repo-check <bypass flags> -m <model> -`.
-- **Turn 2 onwards:** `codex exec resume <session id> -` with the same `--json`, `--skip-git-repo-check`, bypass and model flags. Flag placement around `resume` has changed between releases; the adapter follows the pinned version, and the PR records the full turn-2 command.
-- **Session id:** taken from the `thread.started` event.
-- **Status:** a turn is `completed` when the exit code is 0 and no `turn.failed` or `error` event ends the turn. A non-zero exit gives `harness_exit`. A `turn.failed` or `error` event with exit 0 gives `harness_reported_error`. Either becomes `provider_error` when the error shows a provider or API error (A2).
-
-### Trace
-
-- Parse the rollout files under `CODEX_HOME/sessions/**/rollout-*.jsonl` into the native `trace.json`, and into `trace.jsonl` using A2's schema. Captured stdout is kept but is not the trace source.
-- **Usage:** `token_count` records carry the cumulative `total_token_usage` and the per-call `last_token_usage`, but no response id, and they can repeat. One `usage` event is written per change in `total_token_usage`, for example from the difference of consecutive totals. `response_id` is `null`. The implementer documents the method in `docs/trace-schema.md`.
-- **Token definitions (A2):** in these records `cached_input_tokens` is part of `input_tokens`. The parser writes `input_tokens` minus `cached_input_tokens` as `input_tokens`, `cached_input_tokens` as `cache_read_tokens`, `null` as `cache_write_tokens`, and `reasoning_output_tokens` as `reasoning_tokens`.
-- **Turn prompt:** Codex writes the environment context and AGENTS.md instructions as user-role items before the prompt. The first `user` message of a turn comes from the `user_message` event.
+- **Config.** `harness: codex` requires `provider: openrouter` and an explicit `model`; anything else is a config error naming the problem. A configured `model.parameters.provider` prints a warning and is listed in `model_parameters.unsupported` (A2).
+- **Image.** `agent-harness-lab:codex` installs Codex at an exact version, follows the other harness images' conventions, and carries `ahl.harness=codex` and `ahl.harness.version` (A1).
+- **Run interfaces.** `ahl run` with Codex produces A2's exit codes, run directory, `result.json`, `session.json` fields and `trace.jsonl`. `response_id` is null in Codex `usage` events. `cache_write_tokens` is null because Codex does not report it, so that token total is null.
+- **Stateless API.** OpenRouter's Responses API keeps no state between requests. No Codex request may be rejected because of `store` or `previous_response_id`, and a resumed turn still has the earlier turns' context.
+- **Web.** `permissions.deny` with `websearch` or `webfetch` disables Codex's web search, and `session.json` lists the operations under `permissions.applied`. If Codex has no separate fetch tool, `webfetch` is covered by the same switch; the PR says which. With the web allowed, web search either works through OpenRouter or the README says it does not.
+- **Skills.** Mount-mode skills go into the user-skill directory that the pinned Codex version reads. Delegated installs use Codex's agent identifier in the skills installer.
 
 ## Acceptance criteria
 
-- **AC-1** (unit) `harness: codex` with `provider: openrouter` and a model loads. Any other provider, or a missing model, raises a `ConfigError` naming the problem.
-- **AC-2** (unit) `codex.Dockerfile` pins `@openai/codex` to an exact version and sets both AHL labels.
-- **AC-3** (unit) Seeding:
-  - the seeded `config.toml` selects the OpenRouter provider with `wire_api = "responses"`, takes its credential from `OPENROUTER_API_KEY` without writing the key to disk, and sets non-prompting approval and sandbox modes;
-  - with a web deny, web search is disabled and `session.json` lists the applied operations;
-  - a config with `model.parameters.provider` prints a warning, and `session.json` has `model_parameters.unsupported` equal to `["provider"]`.
-- **AC-4** (unit) The turn-1 and turn-2 commands both contain `--json` and the configured model, and read the prompt from stdin (`-`). The turn-2 command resumes the session id taken from the `thread.started` event in a recorded fixture.
-- **AC-5** (unit) Mount-mode skills are mounted under the native user-skill directory of the pinned Codex version, and `skills.py` maps `codex` to its installer agent identifier.
-- **AC-6** (unit) Rollout fixtures committed from the AC-7 run:
-  - parse into `trace.jsonl` lines that validate against A2's schema;
-  - the first `user` message of each turn contains its prompt text with leading and trailing whitespace stripped;
-  - repeated `token_count` records with an unchanged total produce no extra `usage` event;
-  - for one response with cached input, the `usage` event's token fields follow A2's token definitions.
-- **AC-7** (live) A two-turn `ahl run` on `openai/gpt-6-sol` meets all of the following:
-  - turn 1's prompt contains a random nonce and asks the agent to remember it without writing it to disk, and to create a file with a tool. Turn 2 asks for the nonce;
-  - turn 2's assistant output contains the nonce;
-  - both turns share one session id;
-  - no request is rejected because of `store` or `previous_response_id`: no such 400 error appears in stderr or the trace;
-  - `totals.cost_usd_key_delta` > 0.
+- **AC-1** (unit) A config with `harness: codex`, `provider: openrouter` and a model, as documented in `config.example.yaml`, loads through the real config loader. Any other provider, or a missing model, is a config error naming the problem.
+- **AC-2** (unit) The Codex Dockerfile pins Codex to an exact version and sets both AHL labels.
+- **AC-3** (unit) Seeded Codex state selects OpenRouter's Responses API, takes the credential from `OPENROUTER_API_KEY` without writing the key to disk, and lets headless runs execute tools without approval prompts. A web deny disables web search and is listed in `permissions.applied`. `model.parameters.provider` gives a warning and `model_parameters.unsupported: ["provider"]`.
+- **AC-4** (unit) Headless driver, on recorded output: turn 2 resumes the session id reported in turn 1, and both turns use the configured model. Exit 0 with no failure event is `completed`; a non-zero exit is `harness_exit`; exit 0 with a failure or error event is `harness_reported_error`.
+- **AC-5** (unit) Mount-mode skills land in the pinned version's user-skill directory, and delegated installs name Codex's installer agent.
+- **AC-6** (unit) On fixtures recorded by AC-7: every `trace.jsonl` line validates against A2's schema; each turn's first `user` message contains its prompt, stripped of leading and trailing whitespace; each API response yields exactly one `usage` event, even where Codex repeats its usage records; for one response with cached input, the token fields follow A2's definitions. No fixture contains `sk-or-`.
+- **AC-7** (live) A two-turn `ahl run` on `openai/gpt-6-sol`. Turn 1 gives a random nonce to remember without writing it to disk, and asks for a file created with a tool; turn 2 asks for the nonce. Turn 2's assistant output contains the nonce, both turns share one session id, no 400 error about `store` or `previous_response_id` appears in stderr or the trace, and `totals.cost_usd_key_delta` > 0.
 - **AC-8** (live) A one-turn `ahl run` with a mounted fixture skill whose `SKILL.md` holds a marker string, and a prompt that asks for that skill, produces an assistant message containing the marker.
-- **AC-9** (unit) A `config.example.yaml`-style config with `harness: codex`, `provider: openrouter` and a model loads without error through `load_config`.
 
-## Test plan
+## Freedom to operate
 
-- Unit tests follow the existing adapter tests in `tests/test_harnesses.py` and `tests/test_openrouter.py`.
-- The live tier records fixtures under `tests/fixtures/headless/codex/`.
+`config.toml` keys and how the credential is supplied; the exact `codex exec` flags and their placement around `resume`; how the prompt reaches Codex; how rollout files are parsed and repeated usage records deduplicated; test layout and fixtures.
+
+## Design sketch (non-binding)
+
+- Per-run `CODEX_HOME` at `<run dir>/codex/` holding `config.toml`: an `openrouter` model provider with `base_url = "https://openrouter.ai/api/v1"` and `wire_api = "responses"`, a command-based auth that reads the environment (avoids "Unknown model" fallback metadata), approvals and sandbox off. The container is the sandbox.
+- Turn 1 `codex exec --json --skip-git-repo-check <bypass> -m <model> -`; later turns `codex exec resume <id> -` with the same flags. Session id from `thread.started`.
+- Trace from `CODEX_HOME/sessions/**/rollout-*.jsonl`, not stdout. `token_count` records carry cumulative and per-call usage but no response id, and repeat; emit one `usage` event per change in the cumulative total. `cached_input_tokens` is inside `input_tokens`, so subtract it; `reasoning_output_tokens` becomes `reasoning_tokens`. The turn's prompt is the `user_message` event, not the environment and AGENTS.md items before it.
+- Current docs name `~/.agents/skills` and treat `~/.codex/skills` as legacy.
 
 ## Risks and open questions
 
-- **Stateless Responses API.** OpenRouter's Responses API keeps no state between requests. Start with a live spike: one prompt with a nonce, one tool call, one resumed turn that must reproduce the nonce. The spike also checks web search through OpenRouter and the skill directory. If Codex cannot work through OpenRouter, stop and report `BLOCKED on AC-7` with the evidence. Do not switch to a different API, provider or harness.
-- **Codex config keys and flags change between releases.** Pin the version and test against it only.
+- **Stateless Responses API.** Codex may assume server-side state that OpenRouter does not keep. The spike shows this early: one prompt with a nonce, one tool call, one resumed turn. If Codex cannot work through OpenRouter, report `BLOCKED on AC-7` with the evidence.
+- Codex config keys and flags change between releases. Pin the version and test against it only.
 
 ## Evidence required in the PR
 
-- The pinned Codex version and the `config.toml` keys used.
-- The full turn-1 and turn-2 commands.
-- The skill directory used.
-- Whether web search works through OpenRouter, and whether `webfetch` is covered by the web-search switch.
-- The `token_count` deduplication method.
-- The AC-7 and AC-8 commands with abridged `result.json` and cost.
-- The spike result.
+- The spike result, the pinned version, the `config.toml` keys, and the full turn-1 and turn-2 commands.
+- The skill directory, whether web search works through OpenRouter, and whether `webfetch` is covered by the web-search switch.
+- The deduplication method, also documented in `docs/trace-schema.md`, and the AC-7 and AC-8 commands with abridged `result.json` and cost.
 - `README.md` and `config.example.yaml` document the Codex harness.
