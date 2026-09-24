@@ -54,7 +54,7 @@ class DockerStub:
     turns: list[Turn] = field(default_factory=list)
     prompts: list[bytes] = field(default_factory=list)
     timeouts: list[float | None] = field(default_factory=list)
-    failing: dict[str, int] = field(default_factory=dict)
+    failing: dict[str, int | BaseException] = field(default_factory=dict)
     running: bool = True
     usage: list[float | Exception] = field(default_factory=list)
     usage_reads: list[float | None] = field(default_factory=list)
@@ -72,6 +72,8 @@ class DockerStub:
         self.calls.append(args)
         if args[1] in self.failing:
             code = self.failing[args[1]]
+            if isinstance(code, BaseException):
+                raise code
             if kwargs.get("check"):
                 raise subprocess.CalledProcessError(code, args, "", "Error response from daemon: stubbed failure")
             return subprocess.CompletedProcess(args, code, "", "Error response from daemon: stubbed failure")

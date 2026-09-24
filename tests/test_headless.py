@@ -134,6 +134,8 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
         ("interrupted", [Turn(raises=KeyboardInterrupt())], {}, 130,
          ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
         ("infra", [], {"build": 1}, 3, ["skipped"] * 3, ("error", "infra")),
+        ("interrupted-build", [], {"build": KeyboardInterrupt()}, 130,
+         ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
     ]
     for name, scripted, failing, code, statuses, run_reason in scenarios:
         docker.turns, docker.failing = list(scripted), failing
@@ -156,7 +158,7 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
         assert [t["status"] for t in outcome["turns"]] == statuses
         for index, turn in enumerate(outcome["turns"], start=1):
             prompt = run / f"turns/{index}/prompt.md"
-            started = turn["status"] != "skipped"
+            started = index <= len(scripted)
             assert prompt.read_text() == f"prompt {index}" and turn["prompt_file"] == f"turns/{index}/prompt.md"
             assert turn["prompt_sha256"] == hashlib.sha256(prompt.read_bytes()).hexdigest()
             assert (run / f"turns/{index}/stdout.jsonl").is_file() == started
@@ -165,7 +167,7 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
             if started:
                 assert turn["started_at"] and turn["ended_at"] and turn["key_usage"]["after"]
             else:
-                assert turn["reason"]["code"] == "skipped_after_failure"
+                assert turn["reason"]["code"] == {"skipped": "skipped_after_failure"}.get(turn["status"], "interrupted")
                 assert {k for k, v in turn.items() if v is not None} == {
                     "index", "prompt_file", "prompt_sha256", "status", "reason",
                 }

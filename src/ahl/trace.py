@@ -12,7 +12,7 @@ TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_wri
 
 
 def event(kind: str, session: str | None, agent: str, ts: str | None, **fields: Any) -> dict[str, Any]:
-    return {"type": kind, "session": session, "agent": agent, "ts": ts, **fields}
+    return {"type": kind, "session": session, "agent": agent, "turn": None, "ts": ts, **fields}
 
 
 def iso_from_ms(milliseconds: Any) -> str | None:
@@ -38,8 +38,7 @@ def write_trace(run_dir: Path, driver: HeadlessDriver, turns: list[dict[str, Any
         ts = parse_ts(native["ts"])
         if ts is not None:
             turn = next((index for index, start in reversed(starts) if start <= ts), None)
-        events.append({"seq": seq, "type": native["type"], "session": native["session"],
-                       "agent": native["agent"], "turn": turn, **native})
+        events.append({"seq": seq, **native, "turn": turn})
     (run_dir / "trace.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     return events
 

@@ -375,9 +375,10 @@ def _trace_events(home: Path) -> list[dict[str, Any]]:
         source = str(path.relative_to(home))
         for line_number, record in enumerate(json_lines(path.read_text(errors="replace")), start=1):
             uuid = record.get("uuid")
-            if isinstance(uuid, str) and uuid in seen:
-                continue
-            seen.add(uuid)
+            if isinstance(uuid, str):
+                if uuid in seen:
+                    continue
+                seen.add(uuid)
             records.append((record, source, line_number))
 
     ledger: _ResponseLedger = {}
@@ -415,10 +416,13 @@ def _trace_events(home: Path) -> list[dict[str, Any]]:
             blocks = responses[identity]["blocks"]
             blocks += [block for block in _blocks(record) if block not in blocks]
 
-    events: list[dict[str, Any]] = []
+    timed: list[tuple[str, dict[str, Any]]] = []
+    last = ""
     for item in items:
-        events += _response_events(item, ledger, results) if "blocks" in item else [item]
-    return sorted(events, key=lambda e: e["ts"] or "")
+        for trace_event in _response_events(item, ledger, results) if "blocks" in item else [item]:
+            last = trace_event["ts"] or last
+            timed.append((last, trace_event))
+    return [trace_event for _, trace_event in sorted(timed, key=lambda pair: pair[0])]
 
 
 def _blocks(record: dict[str, Any]) -> list[dict[str, Any]]:

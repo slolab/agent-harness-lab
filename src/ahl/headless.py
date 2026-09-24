@@ -24,27 +24,29 @@ WARNINGS = {
 }
 
 
-def run_headless(run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None) -> int:
-    return _HeadlessRun(run, turn_files, timeout).execute(failure)
+def run_headless(
+    run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None, interrupted: bool
+) -> int:
+    return _HeadlessRun(run, turn_files, timeout, interrupted).execute(failure)
 
 
 class _HeadlessRun:
-    def __init__(self, run: PreparedRun, turn_files: list[Path], timeout: float) -> None:
+    def __init__(self, run: PreparedRun, turn_files: list[Path], timeout: float, interrupted: bool) -> None:
         self.run = run
         self.driver = run.adapter.driver
         self.timeout = timeout
         self.key = provider_key(run.config) if run.config.provider.name == "openrouter" else None
         self.turns = [self._record(index, path) for index, path in enumerate(turn_files, start=1)]
         self.warnings: list[dict[str, Any]] = []
-        self.interrupted = False
+        self.interrupted = interrupted
 
     def execute(self, failure: str | None) -> int:
-        started = failure is None
+        started = failure is None and not self.interrupted
         try:
-            if failure is None:
+            if started:
                 failure = self._start()
             session_id = None
-            for turn in self.turns if failure is None else []:
+            for turn in self.turns if started and failure is None else []:
                 session_id = self._turn(turn, session_id) or session_id
                 if turn["status"] != "completed" or self.interrupted:
                     break
@@ -169,7 +171,7 @@ class _HeadlessRun:
         stopped = next((turn for turn in self.turns if turn["status"] not in (None, "completed")), None)
         if self.interrupted and pending and failure is None and stopped is None:
             stopped = pending.pop(0)
-            message = f"interrupted before turn {stopped['index']}"
+            message = f"turn {stopped['index']} was interrupted"
             stopped.update(status="interrupted", reason={"code": "interrupted", "message": message})
         cause = f"turn {stopped['index']} {stopped['status']}" if stopped else "the run failed before turn 1"
         for turn in pending:
@@ -195,7 +197,7 @@ class _HeadlessRun:
             "session_id": sessions[-1] if sessions else None,
             "turns": self.turns,
             "totals": {
-                "wall_clock_seconds": round(sum(turn["wall_clock_seconds"] for turn in started), 3),
+                "wall_clock_seconds": round(sum(turn["wall_clock_seconds"] or 0 for turn in started), 3),
                 "cost_usd_key_delta": round(sum(deltas), 10) if self.key and None not in deltas else None,
                 **token_totals(events),
             },
