@@ -11,16 +11,17 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 - `ahl run`: flags, exit codes, run directory, `result.json` with key-based cost, and new `session.json` fields. Unique container names, also for `ahl up`, and teardown in every terminal state.
 - A normalized `trace.jsonl` with a JSON Schema and token definitions.
 - Headless drivers for Claude Code and OpenCode, including OpenCode web denial and OpenRouter provider routing.
+- A live, condensed view of each running turn on the terminal.
 
 ## Non-goals
 
 - Codex (A3), and headless drivers for Gemini, agy, Claude Science and DeepSeek.
 - Parallel sessions, retries, batch orchestration and budget caps. Callers do these.
-- Parsing traces while a session runs, restricting egress, truncating trace content, and fixing file ownership after `ahl up`.
+- Restricting egress, truncating trace content, and fixing file ownership after `ahl up`.
 
 ## Interfaces
 
-**Command.** `ahl run -c CONFIG --turn FILE [--turn FILE …] [--env-file PATH] [--runs-dir DIR] [--name NAME] [--timeout SECONDS] [--build/--no-build]`
+**Command.** `ahl run -c CONFIG --turn FILE [--turn FILE …] [--env-file PATH] [--runs-dir DIR] [--name NAME] [--timeout SECONDS] [--build/--no-build] [--quiet]`
 
 - Turn *n* is the *n*-th `--turn` file, delivered to the harness byte for byte. `--timeout` applies to each turn; the default is 3600.
 - `--env-file`, `--runs-dir`, `--name`, `--build` and path resolution behave as in `ahl up` (A1). A `--name` whose run directory exists, and a harness without a headless driver, are usage errors (exit 2).
@@ -91,6 +92,8 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 - AHL writes full tool outputs and never writes `output_truncated` or `output_original_length`. They exist so that callers' shortened copies still validate.
 - **Token definitions.** `input_tokens`: input neither read from nor written to cache. `cache_read_tokens`, `cache_write_tokens`: input read from, or written to, cache. `output_tokens`: output as billed, reasoning included, also where the harness stores reasoning separately, as OpenCode does. `reasoning_tokens`: the reported reasoning subset of `output_tokens`, or null. `docs/trace-schema.md` documents each harness's conversion.
 
+**Live view.** While a turn runs, `ahl run` prints a condensed view of the harness's streamed output to stderr. It shows assistant text (shortened), each tool call with its tool name and a short input, subagent starts, and errors, marked with the agent they come from. `--quiet` limits the output to the per-turn summary. The run directory is the same either way.
+
 ## Acceptance criteria
 
 - **AC-1** (unit) With Docker stubbed, `ahl run` takes the flags above with their defaults, and a relative `--turn` resolves against the working directory. Each exit code arises in its situation with its run status and reason: `docker exec` exit 125–127, a daemon error and a vanished container each give 3 and `infra`; a harness exit 1 gives `harness_exit`; a recorded HTTP 429 gives `provider_error`. A taken `--name` and a harness without a driver give exit 2 and no `result.json`.
@@ -107,6 +110,8 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 - **AC-8** (unit) On fixtures recorded by AC-9: every `trace.jsonl` line validates against the schema; each turn's first `user` message contains its prompt; `tool_call` events carry their outputs; for one cached response per harness, the token fields equal values computed by hand under the definitions; one OpenCode response with non-zero reasoning has `output_tokens` including it. No fixture contains `sk-or-`. The schema file and `docs/trace-schema.md` list the same event types and fields.
 - **AC-9** (live) Two-turn smoke runs: Claude Code on `anthropic/claude-sonnet-5`, and OpenCode on `deepseek/deepseek-v4.1-flash` with a provider pin. Turn 1 gives a random nonce to remember without writing it to disk, and asks for a file created with a tool; turn 2 asks for the nonce. For each: turn 2's assistant output contains the nonce; both turns report one session id and are `completed`; `totals.cost_usd_key_delta` > 0. Claude runs as root with no permission prompt or refusal, and every `usage` event names the same model. OpenCode's token totals are non-zero and equal the per-message sums in its database after the reasoning conversion.
 - **AC-10** (live) For both harnesses, the AC-9 scenario plus an instruction to ask the user a clarifying question ends within `--timeout` without waiting for input, and `trace.jsonl` has an `assistant` message for the turn. `completed` passes. `failed` passes only when the reason is the denial of the ask-user tool; `provider_error`, `infra` and startup failures fail the test.
+- **AC-11** (unit) Replaying recorded stdout from both harnesses, including a subagent, the live view shows assistant text, tool names, the subagent's start and its tool calls, and errors, in order. With `--quiet`, only the per-turn summaries appear.
+- **AC-12** (live) For both harnesses, one turn tells the agent to delegate a small tool-using task to a subagent, using the harness's own subagent mechanism. `trace.jsonl` then has events whose `agent` is a subagent id, including that subagent's `tool_call` events. Each API response, the subagent's included, is counted once in `usage`. Every line validates against the schema.
 
 ## Freedom to operate
 
