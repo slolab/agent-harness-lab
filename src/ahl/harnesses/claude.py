@@ -25,6 +25,7 @@ from ahl.trace import event, parse_ts
 CONTAINER_CLAUDE_HOME = "/root/.claude"
 CONTAINER_WORKSPACE_SKILLS = "/workspace/.claude/skills"
 ASK_USER_TOOL = "AskUserQuestion"
+SUBAGENT_TOOLS = ("Agent", "Task")
 MODEL_ALIASES = (
     "ANTHROPIC_DEFAULT_FABLE_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -124,6 +125,23 @@ class ClaudeDriver:
                 if e.get("type") == "assistant" and isinstance(e.get("message"), dict)
             ),
         )
+
+    def view(self, record: dict[str, Any]) -> list[tuple[str, str, str]]:
+        if record.get("type") == "result":
+            return [("main", "error", str(record.get("result") or record.get("subtype")))] if record.get("is_error") else []
+        agent, items = record.get("parent_tool_use_id") or "main", []
+        for block in _blocks(record) if record.get("type") in ("assistant", "user") else []:
+            tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+            if block.get("type") == "text" and record["type"] == "assistant":
+                items.append((agent, "error" if record.get("error") else "text", str(block.get("text"))))
+            elif block.get("type") == "tool_use" and block.get("name") in SUBAGENT_TOOLS:
+                detail = f"{block.get('id')} {tool_input.get('subagent_type', '')}: {tool_input.get('description', '')}"
+                items.append((agent, "subagent", detail))
+            elif block.get("type") == "tool_use":
+                items.append((agent, "tool", f"{block.get('name')} {json.dumps(tool_input)}"))
+            elif block.get("type") == "tool_result" and block.get("is_error"):
+                items.append((agent, "error", _extract_text(block.get("content"))))
+        return items
 
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
         return _trace_events(_home(run_dir))

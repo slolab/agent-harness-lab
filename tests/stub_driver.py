@@ -18,6 +18,9 @@ class StubDriver:
     def report(self, stdout):
         return TurnReport(session_id=None, error=None, provider_error=False, replied=True)
 
+    def view(self, record):
+        return []
+
     def trace(self, run_dir):
         return []
 

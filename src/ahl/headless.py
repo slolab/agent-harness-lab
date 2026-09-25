@@ -7,6 +7,7 @@ import re
 import shlex
 import signal
 import subprocess
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ import typer
 
 from ahl import keyusage
 from ahl.docker import CONTAINER_WORKSPACE, docker_daemon_unreachable
-from ahl.harnesses.base import TurnReport, provider_key
+from ahl.harnesses.base import TurnReport, json_lines, provider_key
 from ahl.runs import PreparedRun, start_container, write_native_trace
 from ahl.trace import TOKEN_FIELDS, token_totals, write_trace
 
@@ -73,18 +74,20 @@ class Interrupts:
 
 
 def run_headless(
-    run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None, interrupts: Interrupts
+    run: PreparedRun, turn_files: list[Path], timeout: float, quiet: bool, failure: str | None, interrupts: Interrupts
 ) -> int:
-    return _HeadlessRun(run, turn_files, timeout, failure, interrupts).execute()
+    return _HeadlessRun(run, turn_files, timeout, quiet, failure, interrupts).execute()
 
 
 class _HeadlessRun:
     def __init__(
-        self, run: PreparedRun, turn_files: list[Path], timeout: float, failure: str | None, interrupts: Interrupts
+        self, run: PreparedRun, turn_files: list[Path], timeout: float, quiet: bool, failure: str | None,
+        interrupts: Interrupts,
     ) -> None:
         self.run = run
         self.driver = run.adapter.driver
         self.timeout = timeout
+        self.quiet = quiet
         self.failure = failure
         self.interrupts = interrupts
         self.key = provider_key(run.config) if run.config.provider.name == "openrouter" else None
@@ -151,10 +154,13 @@ class _HeadlessRun:
         ]
         started, exit_code, outcome = datetime.now(timezone.utc), None, None
         turn["started_at"] = started.isoformat()
+        source, sink = os.pipe()
+        tee = threading.Thread(target=self._tee, args=(source, directory / "stdout.jsonl"))
+        tee.start()
         try:
             with (
+                open(sink, "wb") as stdout,
                 (directory / "prompt.md").open("rb") as stdin,
-                (directory / "stdout.jsonl").open("wb") as stdout,
                 (directory / "stderr.log").open("wb") as stderr,
                 self.interrupts.interruptible(),
             ):
@@ -165,6 +171,7 @@ class _HeadlessRun:
             outcome = TurnOutcome("timeout", "timeout", f"turn {index} exceeded --timeout {self.timeout:g} seconds")
         except KeyboardInterrupt:
             outcome = TurnOutcome("interrupted", "interrupted", f"turn {index} was interrupted")
+        tee.join()
         ended = datetime.now(timezone.utc)
         if outcome is not None:
             self._in_container("kill -KILL -1")
@@ -186,6 +193,14 @@ class _HeadlessRun:
         )
         typer.echo(f"Turn {index}: {outcome.status}{f' ({outcome.reason})' if outcome.reason else ''}")
         return turn["session_id"]
+
+    def _tee(self, source: int, target: Path) -> None:
+        with open(source, "rb") as stream, target.open("wb") as copy:
+            for line in stream:
+                copy.write(line)
+                for record in [] if self.quiet else json_lines(line.decode(errors="replace")):
+                    for agent, kind, detail in self.driver.view(record):
+                        typer.echo(f"  [{agent}] {kind}: {_short(detail)}", err=True)
 
     def _classify(self, exit_code: int, report: TurnReport, stderr: str) -> TurnOutcome:
         daemon = "error response from daemon" in stderr.lower() or docker_daemon_unreachable(stderr)
@@ -277,6 +292,11 @@ class _HeadlessRun:
             },
             "warnings": self.warnings,
         }
+
+
+def _short(text: str, limit: int = 160) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
 def _literal(path: str) -> str:

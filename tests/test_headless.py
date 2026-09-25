@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import urllib.error
 from pathlib import Path
@@ -365,3 +366,42 @@ def test_a2_ac1_ac7_turn_status_follows_recorded_harness_output(
     assert (turn["reason"] or {}).get("code") == reason
     assert (outcome["status"], outcome["reason"]) == (turn["status"], turn["reason"])
     assert (tmp_path / "runs/r/turns/1/stdout.jsonl").read_text() == stdout
+
+
+CLAUDE_AGENT = "toolu_019dWgHLefT4G9zZ487LDnZt"
+OPENCODE_CHILD = "ses_f26393544ffeNnfJMnbRjbJWuZ"
+
+
+@pytest.mark.parametrize("harness,expected", [
+    ("claude", [
+        ("main", "subagent", f"{CLAUDE_AGENT} general-purpose: List root directory entries"),
+        (CLAUDE_AGENT, "tool", 'Bash {"command": "ls /"'),
+        ("main", "text", "The subagent ran `ls /` and saw 14 entries."),
+        ("main", "error", "API Error: Request rejected (429)"),
+        ("main", "error", "API Error: Request rejected (429)"),
+    ]),
+    ("opencode", [
+        ("main", "subagent", f"{OPENCODE_CHILD} general: Run ls and count entries"),
+        ("main", "text", "20"),
+        ("main", "error", "Rate limit exceeded"),
+    ]),
+])
+def test_a2_ac11_live_view_shows_recorded_turns_in_order_unless_quiet(tmp_path, monkeypatch, docker, harness, expected):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    config = write_config(tmp_path / "config.yaml", {"claude": CLAUDE, "opencode": OPENCODE}[harness])
+    subagent = recorded(harness, "subagent")
+    view = re.compile(r"  \[(\S+)\] (\w+): (.*)")
+    outputs = {}
+    for name in ("loud", "quiet"):
+        docker.turns = [Turn(stdout=subagent), Turn(exit_code=1, stdout=recorded(harness, "http_429"))]
+        result = ahl("run", "-c", config, *prompts(tmp_path, 2), "--no-build", "--name", name,
+                     *(["--quiet"] if name == "quiet" else []))
+        assert result.exit_code == 1, result.output
+        assert (tmp_path / "runs" / name / "turns/1/stdout.jsonl").read_text() == subagent
+        outputs[name] = result
+
+    shown = [match.groups() for line in outputs["loud"].stderr.splitlines() if (match := view.fullmatch(line))]
+    assert [(agent, kind) for agent, kind, _ in shown] == [(agent, kind) for agent, kind, _ in expected]
+    assert all(detail.startswith(fragment) for (_, _, detail), (_, _, fragment) in zip(shown, expected))
+    assert not [line for line in outputs["quiet"].output.splitlines() if view.fullmatch(line)]
+    assert outputs["quiet"].stdout.splitlines()[:2] == ["Turn 1: completed", "Turn 2: failed (provider_error)"]

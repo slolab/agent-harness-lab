@@ -80,6 +80,23 @@ class OpenCodeDriver:
             replied=any(e.get("type") == "text" and (e.get("part") or {}).get("text", "").strip() for e in events),
         )
 
+    def view(self, record: dict[str, Any]) -> list[tuple[str, str, str]]:
+        part = record.get("part") or {}
+        state = part.get("state") or {}
+        tool_input = state.get("input") if isinstance(state.get("input"), dict) else {}
+        if record.get("type") == "text":
+            return [("main", "text", str(part.get("text")))]
+        if record.get("type") == "error":
+            return [("main", "error", _error_message(record.get("error")))]
+        if record.get("type") != "tool_use":
+            return []
+        if part.get("tool") == "task":
+            child = (state.get("metadata") or {}).get("sessionId")
+            item = ("main", "subagent", f"{child} {tool_input.get('subagent_type', '')}: {tool_input.get('description', '')}")
+        else:
+            item = ("main", "tool", f"{part.get('tool')} {json.dumps(tool_input)}")
+        return [item, *([("main", "error", str(state.get("error")))] if state.get("status") == "error" else [])]
+
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
         return _trace_events(_data_dir(run_dir))
 

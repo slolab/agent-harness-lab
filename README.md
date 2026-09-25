@@ -67,7 +67,7 @@ ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
 
 ```bash
 ahl run -c config.yaml --turn build.md --turn review.md \
-  [--env-file PATH] [--runs-dir DIR] [--name NAME] [--timeout SECONDS] [--build/--no-build]
+  [--env-file PATH] [--runs-dir DIR] [--name NAME] [--timeout SECONDS] [--build/--no-build] [--quiet]
 ```
 
 `ahl run` sends each `--turn` file, byte for byte on stdin, as one turn of a
@@ -81,6 +81,16 @@ turn that does not complete, the remaining turns are skipped.
 No session can wait for input: tools run without permission prompts, the
 ask-user tool is denied, and with OpenRouter every Claude Code model alias
 resolves to the configured model.
+
+While a turn runs, AHL prints a condensed view of the harness's streamed output
+to stderr, one line per item, marked with its agent: `[agent] text:` for
+assistant text, `tool:` for a tool call with its input, `subagent:` for a
+subagent start, and `error:`. Long items are shortened to one line. Claude Code
+streams its subagents' messages, marked with the id of the tool call that
+started them. OpenCode streams only the main session, so a subagent shows as
+its start, with the child session id; its tool calls appear in `trace.jsonl`
+after the turn. `--quiet` prints only the per-turn summary lines and warnings.
+The run directory is the same either way.
 
 | Exit | Run `status` | Reason codes | When |
 |---|---|---|---|

@@ -137,6 +137,7 @@ def run(
     name: NameOption = None,
     timeout: Annotated[float, typer.Option("--timeout", min=1, help="Seconds allowed per turn")] = 3600,
     build: BuildOption = True,
+    quiet: Annotated[bool, typer.Option("--quiet", help="Print only the per-turn summary, not the live view")] = False,
 ) -> None:
     """Run each --turn file as one turn of a single headless harness session.
 
@@ -161,7 +162,7 @@ def run(
             pass
         _claim(run_dir, "choose another --name")
         prepared = _prepare(run_config, run_dir, image, resume=False, headless=True)
-        code = run_headless(prepared, turn, timeout, failure, interrupts)
+        code = run_headless(prepared, turn, timeout, quiet, failure, interrupts)
     raise typer.Exit(code)
 
 
