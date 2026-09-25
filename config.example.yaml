@@ -18,7 +18,7 @@ model: gemini-3.5-flash
 # harness_version: 2.1.273
 
 # --- Native web-tool permissions (run-wide, including agents) -----------
-# Claude Code and DeepSeek enforce these. OpenCode, Gemini, Antigravity,
+# Claude Code, OpenCode and DeepSeek enforce these. Gemini, Antigravity
 # and Claude Science warn and continue with these denials unapplied.
 # Omit this block or use deny: [] for no AHL denials. Resume replaces old rules.
 # Only websearch and webfetch are valid; shell HTTP/network access is unchanged.
