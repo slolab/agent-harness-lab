@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 import yaml
 
@@ -29,20 +30,29 @@ ASK_USER_TOOL = {"claude": "AskUserQuestion", "opencode": "question"}
 DENIAL = re.compile(r"denied|not allowed|prevents you|no such tool|unavailable tool|not available|disallowed", re.I)
 
 
-def smoke(tmp_path: Path, harness: str, extra: str = "") -> tuple[str, subprocess.CompletedProcess, Path]:
-    nonce = secrets.token_hex(6)
+def ahl_run(tmp_path: Path, harness: str, *turns: str) -> tuple[subprocess.CompletedProcess, Path]:
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(CONFIGS[harness]))
-    (tmp_path / "t1.md").write_text(
-        f"Remember this nonce for later: {nonce}. Do not write the nonce to any file.\n{extra}"
-        "Use a tool to create the file /workspace/hello.txt containing the word hello. Then reply with 'ready'.\n"
-    )
-    (tmp_path / "t2.md").write_text("What is the nonce I gave you earlier? Reply with the nonce only.\n")
+    flags = []
+    for index, text in enumerate(turns, start=1):
+        (tmp_path / f"t{index}.md").write_text(text)
+        flags += ["--turn", f"t{index}.md"]
     process = subprocess.run(
-        [sys.executable, "-m", "ahl.cli", "run", "-c", "config.yaml", "--turn", "t1.md", "--turn", "t2.md",
+        [sys.executable, "-m", "ahl.cli", "run", "-c", "config.yaml", *flags,
          "--env-file", str(ENV_FILE), "--name", "smoke", "--timeout", "900"],
         cwd=tmp_path, capture_output=True, text=True, timeout=3600,
     )
-    return nonce, process, tmp_path / "runs/smoke"
+    return process, tmp_path / "runs/smoke"
+
+
+def smoke(tmp_path: Path, harness: str, extra: str = "") -> tuple[str, subprocess.CompletedProcess, Path]:
+    nonce = secrets.token_hex(6)
+    process, run = ahl_run(
+        tmp_path, harness,
+        f"Remember this nonce for later: {nonce}. Do not write the nonce to any file.\n{extra}"
+        "Use a tool to create the file /workspace/hello.txt containing the word hello. Then reply with 'ready'.\n",
+        "What is the nonce I gave you earlier? Reply with the nonce only.\n",
+    )
+    return nonce, process, run
 
 
 def events(run: Path) -> list[dict[str, Any]]:
@@ -112,3 +122,39 @@ def test_a2_ac10_an_ask_user_instruction_never_waits_for_input(tmp_path, harness
             if d.get("tool_name") == tool
         ]
         assert denied_calls or denied_natively
+
+
+def native_responses(run: Path, harness: str) -> list[str]:
+    if harness == "claude":
+        records = [json.loads(line) for path in (run / "claude/projects").rglob("*.jsonl") for line in path.open()]
+        return sorted({
+            r["message"]["id"] for r in records
+            if r.get("type") == "assistant" and not r.get("isApiErrorMessage") and r["message"].get("model") != "<synthetic>"
+        })
+    with sqlite3.connect(run / "opencode/data/opencode.db") as db:
+        rows = [(session, json.loads(data)) for session, data in db.execute("SELECT session_id, data FROM message")]
+    return sorted(
+        session for session, r in rows
+        if r["role"] == "assistant" and any((r["tokens"]["input"], r["tokens"]["output"], r["tokens"]["reasoning"],
+                                             r["tokens"]["cache"]["read"], r["tokens"]["cache"]["write"]))
+    )
+
+
+@pytest.mark.parametrize("harness", ["claude", "opencode"])
+def test_a2_ac12_a_subagent_s_tool_calls_and_responses_reach_the_trace(tmp_path, harness):
+    process, run = ahl_run(
+        tmp_path, harness,
+        "Delegate this to one subagent with your tool for launching subagents: it runs `ls /` with its shell tool "
+        "and reports how many entries it saw. Do not run the command yourself. Then reply with that number.\n",
+    )
+
+    assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
+    trace = events(run)
+    schema = json.loads((Path(__file__).resolve().parents[1] / "src/ahl/schemas/trace_event.schema.json").read_text())
+    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+    for trace_event in trace:
+        validator.validate(trace_event)
+    subagent = [e for e in trace if e["agent"] != "main"]
+    assert [e for e in subagent if e["type"] == "tool_call"] and [e for e in subagent if e["type"] == "usage"]
+    usage = [e for e in trace if e["type"] == "usage"]
+    assert sorted(e["response_id" if harness == "claude" else "session"] for e in usage) == native_responses(run, harness)

@@ -76,8 +76,8 @@ comes from the OpenRouter key (`totals.cost_usd_key_delta`), not from
 
 ## Claude Code
 
-Source: the project JSONL files under `claude/projects/`, subagent files
-included. Records repeated across files (same `uuid`) are read once.
+Source: the project JSONL files under `claude/projects/`, including each
+session's `<session>/subagents/agent-<id>.jsonl` (Claude Code 2.1.282). Records repeated across files (same `uuid`) are read once.
 Subagent records carry `isSidechain` and an `agentId`, which becomes `agent`.
 
 - One assistant `message`, its `tool_call` events and one `usage` event per
