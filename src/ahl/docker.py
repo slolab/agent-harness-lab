@@ -24,6 +24,18 @@ GIT_IDENTITY_ENV = {
 Volumes = list[tuple[Path, str]]
 
 
+def docker_daemon_unreachable(text: str) -> bool:
+    lower = text.lower()
+    return any(
+        needle in lower
+        for needle in (
+            "cannot connect to the docker daemon",
+            "failed to connect to the docker api",
+            "is the docker daemon running",
+        )
+    )
+
+
 def image_name(harness: str) -> str:
     return f"{IMAGE_REPOSITORY}:{harness}"
 

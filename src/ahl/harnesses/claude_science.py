@@ -17,6 +17,7 @@ DEFAULT_PORT = 8000
 
 class ClaudeScienceAdapter:
     permission_handler = UnsupportedPermissions()
+    driver = None
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
         # Claude Science authenticates in its web UI with a Claude account.

@@ -15,6 +15,7 @@ CONTAINER_AGY_SKILLS = "/root/.gemini/antigravity-cli/skills"
 
 class AgyAdapter:
     permission_handler = UnsupportedPermissions()
+    driver = None
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
         return google_env(config)

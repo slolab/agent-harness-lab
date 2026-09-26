@@ -17,7 +17,8 @@ configuration errors.
 |---|---|
 | Claude Code | `websearch` → `WebSearch`; `webfetch` → `WebFetch` |
 | DeepSeek | `websearch` → `web_search`; `webfetch` → `web_fetch` |
-| OpenCode, Gemini, Antigravity, Claude Science | Unsupported; one warning lists unapplied operations and reasons |
+| OpenCode | `websearch` and `webfetch` set to `deny` under `permission` in the seeded `opencode.json` |
+| Gemini, Antigravity, Claude Science | Unsupported; one warning lists unapplied operations and reasons |
 
 Unsupported mappings continue launching and record the gap. They never claim
 successful enforcement. These restrictions do not block HTTP through shell,

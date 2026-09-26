@@ -24,6 +24,7 @@ AUTH_TYPE = {
 
 class GeminiAdapter:
     permission_handler = UnsupportedPermissions()
+    driver = None
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
         return google_env(config)

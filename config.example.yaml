@@ -18,7 +18,7 @@ model: gemini-3.5-flash
 # harness_version: 2.1.273
 
 # --- Native web-tool permissions (run-wide, including agents) -----------
-# Claude Code and DeepSeek enforce these. OpenCode, Gemini, Antigravity,
+# Claude Code, OpenCode and DeepSeek enforce these. Gemini, Antigravity
 # and Claude Science warn and continue with these denials unapplied.
 # Omit this block or use deny: [] for no AHL denials. Resume replaces old rules.
 # Only websearch and webfetch are valid; shell HTTP/network access is unchanged.
@@ -131,11 +131,14 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #     project: your-gcp-project-id
 #     location: global
 
-# --- Model parameters (reserved for future use) -------------------------
+# --- Model parameters ---------------------------------------------------
+# OpenCode with provider: openrouter passes `provider` verbatim to
+# OpenRouter's provider routing. Keys a harness cannot apply print a warning
+# and are listed in session.json under model_parameters.unsupported.
 # model:
-#   name: gemini-3.5-flash
+#   name: deepseek/deepseek-v4.1-flash
 #   parameters:
-#     thinking: true
+#     provider: {only: [deepinfra], quantizations: [fp8], allow_fallbacks: false}
 
 # --- Other harness/provider combinations --------------------------------
 # Gemini CLI on Vertex express:
