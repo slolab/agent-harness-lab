@@ -150,10 +150,9 @@ files are ordered by timestamp.
   that item's `status`: `completed` is false, `failed` and `declined` are true,
   otherwise null. A `web_search_call` is a `web_search` tool call with its
   `action` as input and a null output.
-- Usage: one `usage` event per `token_usage_record`, deduplicated by
-  `response_id`. Codex repeats each response's usage in an `event_msg`
-  `token_count`, which is ignored. `model` is the current `turn_context`
-  model.
+- Usage: one `usage` event per `token_usage_record`, which Codex writes once
+  per response. The `event_msg` `token_count` that repeats it is ignored.
+  `model` is the current `turn_context` model.
 - Tokens: Codex's `input_tokens` include cached and cache-written input.
   `input_tokens` = `input_tokens − cached_input_tokens −
   cache_write_input_tokens`, `cache_read_tokens` = `cached_input_tokens`,

@@ -90,8 +90,8 @@ streams its subagents' messages, marked with the id of the tool call that
 started them. OpenCode streams only the main session, so a subagent shows as
 its start, with the child session id; its tool calls appear in `trace.jsonl`
 after the turn. Codex streams only the main thread too: a subagent shows as its
-`spawn_agent` call with the subagent's thread id. `--quiet` prints only the per-turn summary lines and warnings.
-The run directory is the same either way.
+`spawn_agent` call with the subagent's thread id. `--quiet` prints only the
+per-turn summary lines and warnings. The run directory is the same either way.
 
 | Exit | Run `status` | Reason codes | When |
 |---|---|---|---|
@@ -328,19 +328,18 @@ model: openai/gpt-6-sol
 Codex runs only with `provider: openrouter` and an explicit model, through
 OpenRouter's Responses API. OpenRouter keeps no state between requests; Codex
 sends `store: false` and the full history, so resumed turns keep their context.
-AHL seeds `runs/<id>/codex/config.toml`, mounted as `~/.codex`: an `openrouter`
-model provider with `wire_api = "responses"`, a credential command that prints
-`OPENROUTER_API_KEY` (the key is never written to disk, and command auth loads
-OpenRouter's model catalogue), `approval_policy = "never"` and
-`sandbox_mode = "danger-full-access"`, since the container is the sandbox, and
-`plugins = false`, which stops a large plugin-marketplace download per run.
-Start it with `codex`. `ahl run` uses `codex exec --json` and, from turn 2,
-`codex exec resume <thread id>`. `model.parameters.provider` is not applied.
+AHL seeds `runs/<id>/codex/config.toml` (mounted as `~/.codex`) with the
+OpenRouter provider, command auth from `OPENROUTER_API_KEY`, no approvals or
+sandbox, and plugins and shell snapshots off, so the key is never written to
+disk. Start it with `codex`. `ahl run` uses `codex exec --json` and, from turn
+2, `codex exec resume <thread id>`. A turn fails on `turn.failed` or on an
+`error` the turn does not recover from; a reconnect notice before the turn
+completes shows in the live view only. `model.parameters.provider` is not
+applied.
 
 Mount-mode skills go to `~/.agents/skills/<name>`; delegated installs use the
 installer agent `codex`, which writes to `~/.codex/skills`. Both are skill roots
 in Codex 0.157.1. Web search works through OpenRouter when allowed.
-`permissions.deny` with `websearch` or `webfetch` sets `web_search = "disabled"`.
 
 ### DeepSeek browser
 
