@@ -52,7 +52,7 @@ Single Python package, `src/ahl/`, exposed via the `ahl` console script (Typer a
 
 **Adding a new provider** means: add it to `PROVIDER_KEY_ENV` in `config.py`, then extend each harness adapter's `build_env()` (and `MODEL_PROVIDER`/`AUTH_TYPE` in `harnesses/opencode.py`/`harnesses/gemini.py` if those harnesses should support it) to handle the new provider name.
 
-**Tests** (`tests/`, pytest) cover `config.py`/`capabilities.py`/`packages.py`/`workspace.py` parsing/validation, `docker.py`'s arg assembly, and each adapter's `seed`/`wire_capabilities`/`parse_trace`/registry behavior against `tmp_path` — no Docker needed. `ahl run` scenarios go through the CLI with the shared Docker stub in `tests/conftest.py` (turn outputs, key usage, clock) and harness outputs recorded under `tests/fixtures/a2/` and, for Codex, `tests/fixtures/a3/`; the Docker tier uses `tests/stub_driver.py`, a driver that calls no model. Run with `uv run pytest`.
+**Tests** (`tests/`, pytest) cover `config.py`/`capabilities.py`/`packages.py`/`workspace.py` parsing/validation, `docker.py`'s arg assembly, and each adapter's `seed`/`wire_capabilities`/`parse_trace`/registry behavior against `tmp_path` — no Docker needed. `ahl run` scenarios go through the CLI with the shared Docker stub in `tests/conftest.py` (turn outputs, key usage, clock) and harness outputs recorded under `tests/fixtures/a2/`; the Docker tier uses `tests/stub_driver.py`, a driver that calls no model. Run with `uv run pytest`.
 
 ## Key design points to preserve
 

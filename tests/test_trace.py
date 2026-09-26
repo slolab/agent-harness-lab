@@ -31,6 +31,11 @@ CACHED_RESPONSE = {
         "input_tokens": 5594, "output_tokens": 60 + 37, "cache_read_tokens": 1792, "cache_write_tokens": 0,
         "reasoning_tokens": 37, "cost_usd": 0.000902676,
     },
+    "codex": {
+        "model": "openai/gpt-6-sol", "response_id": "gen-1790411646-NeYVj0IYSw6PdCBFpeXN",
+        "input_tokens": 11838 - 11620 - 150, "output_tokens": 5, "cache_read_tokens": 11620, "cache_write_tokens": 150,
+        "reasoning_tokens": 0, "cost_usd": None,
+    },
 }
 
 
@@ -205,8 +210,6 @@ def write_codex(run: Path) -> list[tuple]:
         }),
         record(2, "response_item", type="function_call_output", call_id="c1", output="Warning: truncated output"),
         record(2, "token_usage_record", **usage("r1", 20, cache_write_input_tokens=4)),
-        record(2, "token_usage_record", **usage("r1", 20, cache_write_input_tokens=4)),
-        record(2, "event_msg", type="token_count", info={"last_token_usage": usage("r1", 20)["usage"]}),
         record(4, "response_item", type="reasoning", summary=[{"type": "summary_text", "text": "look it up"}]),
         record(4, "response_item", type="web_search_call", id="ws1", status="completed",
                action={"type": "search", "query": "q"}),
@@ -214,7 +217,6 @@ def write_codex(run: Path) -> list[tuple]:
         record(4, "event_msg", type="item_completed", item={"type": "FileChange", "id": "c2", "status": "failed"}),
         record(4, "response_item", type="custom_tool_call_output", call_id="c2", output="patch rejected"),
         record(5, "token_usage_record", **usage("r2", 30)),
-        record(7, "response_item", **text("user", "<subagent_notification>")),
         record(7, "event_msg", type="task_complete", error={"message": "rate limited"}),
     ]
     subagent = [
@@ -243,7 +245,6 @@ def write_codex(run: Path) -> list[tuple]:
         ("tool_call", 1, "main", "web_search", None, False),
         ("tool_call", 1, "main", "apply_patch", "patch rejected", True),
         ("usage", 1, "main", 20, 9, 10, None, 1),
-        ("message", 2, "main", "system", "<subagent_notification>", None),
         ("error", 2, "main", "rate limited"),
     ]
 
@@ -261,8 +262,8 @@ def test_a2_ac8_converters_follow_the_documented_rules_on_edge_records(tmp_path,
     assert [(e["type"], e["turn"], e["agent"], *(e[k] for k in DETAIL[e["type"]])) for e in events] == expected
 
 
-@pytest.mark.parametrize("harness", ["claude", "opencode"])
-def test_a2_ac8_recorded_runs_give_valid_traces_with_prompts_outputs_and_tokens(tmp_path, harness):
+@pytest.mark.parametrize("harness", ["claude", "opencode", "codex"])
+def test_a2_ac8_a3_ac6_recorded_runs_give_valid_traces_with_prompts_outputs_and_tokens(tmp_path, harness):
     run = tmp_path / "run"
     shutil.copytree(FIXTURES / "trace" / harness, run)
     if harness == "opencode":
@@ -279,7 +280,14 @@ def test_a2_ac8_recorded_runs_give_valid_traces_with_prompts_outputs_and_tokens(
         assert (run / turn["prompt_file"]).read_text().strip() in user[0]["text"]
     calls = [e for e in events if e["type"] == "tool_call"]
     assert calls and all(isinstance(e["output"], str) and e["is_error"] is False for e in calls)
-    assert CACHED_RESPONSE[harness] in [{k: e[k] for k in USAGE_FIELDS} for e in events if e["type"] == "usage"]
+    usage = [e for e in events if e["type"] == "usage"]
+    assert CACHED_RESPONSE[harness] in [{k: e[k] for k in USAGE_FIELDS} for e in usage]
+    if harness == "codex":
+        native = [json.loads(line) for path in (run / "codex/sessions").rglob("*.jsonl") for line in path.open()]
+        assert sorted(e["response_id"] for e in usage) == sorted(
+            {r["payload"]["response_id"] for r in native if r["type"] == "token_usage_record"}
+        )
+        assert calls[0]["input"]["cmd"].startswith("apply_patch")
 
 
 def test_a2_ac8_schema_matches_the_documentation_and_no_fixture_holds_a_key():

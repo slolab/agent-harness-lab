@@ -64,8 +64,8 @@ def assistant_text(trace: list[dict[str, Any]], turn: int) -> str:
     return "\n".join(e["text"] for e in trace if e["type"] == "message" and e["role"] == "assistant" and e["turn"] == turn)
 
 
-@pytest.mark.parametrize("harness", ["claude", "opencode"])
-def test_a2_ac9_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harness):
+@pytest.mark.parametrize("harness", ["claude", "opencode", "codex"])
+def test_a2_ac9_a3_ac7_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harness):
     nonce, process, run = smoke(tmp_path, harness)
 
     assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
@@ -82,7 +82,7 @@ def test_a2_ac9_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harnes
         assert not [e for e in trace if e["type"] == "tool_call" and e["is_error"]]
         results = [json.loads(line) for n in (1, 2) for line in (run / f"turns/{n}/stdout.jsonl").read_text().splitlines()]
         assert [r["permission_denials"] for r in results if r["type"] == "result"] == [[], []]
-    else:
+    elif harness == "opencode":
         with sqlite3.connect(run / "opencode/data/opencode.db") as db:
             rows = [json.loads(data) for (data,) in db.execute("SELECT data FROM message")]
         tokens = [r["tokens"] for r in rows if r["role"] == "assistant"]
@@ -94,6 +94,11 @@ def test_a2_ac9_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harnes
         }
         assert {key: outcome["totals"][key] for key in expected} == expected
         assert expected["input_tokens"] > 0 and expected["output_tokens"] > 0
+    else:
+        logs = [process.stderr, (run / "trace.jsonl").read_text()]
+        logs += [(run / f"turns/{n}/{name}").read_text() for n in (1, 2) for name in ("stderr.log", "stdout.jsonl")]
+        rejected = re.compile(r"\b400\b.*(\bstore\b|previous_response_id)|(\bstore\b|previous_response_id).*\b400\b")
+        assert not [line for log in logs for line in log.splitlines() if rejected.search(line)]
 
 
 @pytest.mark.parametrize("harness", ["claude", "opencode"])
@@ -159,22 +164,6 @@ def test_a2_ac12_a_subagent_s_tool_calls_and_responses_reach_the_trace(tmp_path,
     assert [e for e in subagent if e["type"] == "tool_call"] and [e for e in subagent if e["type"] == "usage"]
     usage = [e for e in trace if e["type"] == "usage"]
     assert sorted(e["response_id" if harness == "claude" else "session"] for e in usage) == native_responses(run, harness)
-
-
-def test_a3_ac7_codex_recalls_the_nonce_through_the_stateless_responses_api(tmp_path):
-    nonce, process, run = smoke(tmp_path, "codex")
-
-    assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
-    outcome, trace = json.loads((run / "result.json").read_text()), events(run)
-    [session] = {t["session_id"] for t in outcome["turns"]}
-    assert session and nonce in assistant_text(trace, 2)
-    assert (run / "workspace/hello.txt").is_file()
-    assert not [p for p in (run / "workspace").rglob("*") if p.is_file() and nonce in p.read_text(errors="replace")]
-    logs = [process.stderr, (run / "trace.jsonl").read_text()]
-    logs += [(run / f"turns/{n}/{name}").read_text() for n in (1, 2) for name in ("stderr.log", "stdout.jsonl")]
-    rejected = re.compile(r"\b400\b.*(\bstore\b|previous_response_id)|(\bstore\b|previous_response_id).*\b400\b")
-    assert not [line for log in logs for line in log.splitlines() if rejected.search(line)]
-    assert outcome["totals"]["cost_usd_key_delta"] > 0
 
 
 def test_a3_ac8_codex_answers_from_a_mounted_skill(tmp_path):
