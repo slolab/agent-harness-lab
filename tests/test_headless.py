@@ -351,8 +351,10 @@ def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeyp
         ("opencode", "http_429", 1, "failed", "provider_error"),
         ("codex", "bad_model", 1, "failed", "harness_exit"),
         ("codex", "bad_model", 0, "failed", "harness_reported_error"),
+        ("codex", "unfinished", 0, "failed", "harness_reported_error"),
         ("codex", "no_text", 0, "failed", "no_assistant_output"),
         ("codex", "http_429", 1, "failed", "provider_error"),
+        ("codex", "reconnect", 0, "completed", None),
     ],
 )
 def test_a2_ac1_ac7_a3_ac4_turn_status_follows_recorded_harness_output(
@@ -365,7 +367,7 @@ def test_a2_ac1_ac7_a3_ac4_turn_status_follows_recorded_harness_output(
 
     result = ahl("run", "-c", config, *prompts(tmp_path, 1), "--no-build", "--name", "r")
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == (0 if status == "completed" else 1), result.output
     outcome = load(tmp_path / "runs/r/result.json")
     [turn] = outcome["turns"]
     assert (turn["status"], turn["exit_code"], turn["session_id"]) == (status, exit_code, session_id(stdout))
@@ -393,11 +395,14 @@ PROVIDER_FAILURE = {"subagent": "completed", "http_429": "failed (provider_error
         ("main", "text", "20"),
         ("main", "error", "Rate limit exceeded"),
     ]),
-    ("codex", {"subagent": "completed", "bad_model": "failed (harness_exit)"}, [
+    ("codex", {"subagent": "completed", "reconnect": "completed", "bad_model": "failed (harness_exit)"}, [
         ("main", "text", "I’ll have one subagent run `ls /`"),
         ("main", "subagent", f"{CODEX_CHILD} Run `ls /` using your shell tool"),
         ("main", "tool", f'wait ["{CODEX_CHILD}"]'),
         ("main", "text", "20"),
+        ("main", "error", "Reconnecting... 1/5 (unexpected status 503 Service Unavailable"),
+        ("main", "tool", "web_search codex stream reconnect"),
+        ("main", "text", "hi"),
         ("main", "error", "Model metadata for `openai/gpt-0-nonexistent` not found"),
         ("main", "error", '{"error":{"message":"openai/gpt-0-nonexistent is not a valid model ID"'),
         ("main", "error", '{"error":{"message":"openai/gpt-0-nonexistent is not a valid model ID"'),

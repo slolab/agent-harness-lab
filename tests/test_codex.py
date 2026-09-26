@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tomllib
 from importlib import resources
@@ -16,6 +17,7 @@ from test_headless import (
 )
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "config.example.yaml"
+ROLLOUTS = Path(__file__).parent / "fixtures/a2/trace/codex/codex/sessions"
 IMAGES = resources.files("ahl") / "images"
 MODEL = CODEX["model"]
 
@@ -47,8 +49,9 @@ def test_a3_ac2_ac3_ac4_ac5_codex_runs_seeded_pinned_unattended_and_resumes(tmp_
     }
     config = write_config(tmp_path / "config.yaml", raw)
     docker.labels = {"ahl.harness": "codex", "ahl.harness.version": "0.156.1"}
+    run = tmp_path / "runs/codex"
     ok = recorded("codex", "success")
-    docker.turns = [Turn(stdout=ok), Turn(stdout=ok)]
+    docker.turns = [Turn(stdout=ok, effect=lambda: shutil.copytree(ROLLOUTS, run / "codex/sessions")), Turn(stdout=ok)]
 
     result = ahl("run", "-c", config, *prompts(tmp_path, 2), "--name", "codex")
 
@@ -57,12 +60,12 @@ def test_a3_ac2_ac3_ac4_ac5_codex_runs_seeded_pinned_unattended_and_resumes(tmp_
         "docker", "build", "-t", "agent-harness-lab:codex", "-f", str(IMAGES / "codex.Dockerfile"),
         "--build-arg", "HARNESS_VERSION=0.156.1", str(IMAGES),
     ]]
-    run = tmp_path / "runs/codex"
     assert {"session.json", "result.json", "trace.jsonl", "trace.json", "codex", "turns"} <= {p.name for p in run.iterdir()}
     session, outcome = load(run / "session.json"), load(run / "result.json")
     assert session["image"]["harness_version"] == "0.156.1"
     assert session["permissions"]["applied"] == ["webfetch", "websearch"]
     assert session["model_parameters"] == {"unsupported": ["provider"]} and "model.parameters.provider" in result.output
+    assert {"message", "tool_call", "usage"} <= {e["type"] for e in load(run / "trace.json")["events"]}
 
     seeded = tomllib.loads((run / "codex/config.toml").read_text())
     provider = seeded["model_providers"][seeded["model_provider"]]
@@ -77,6 +80,7 @@ def test_a3_ac2_ac3_ac4_ac5_codex_runs_seeded_pinned_unattended_and_resumes(tmp_
     assert token.strip() == "from-env"
     launch = docker.launches()[-1]
     assert container_env(launch)["OPENROUTER_API_KEY"] == "test-key"
+    assert seeded["features"]["shell_snapshot"] is False
     assert not [p for p in run.rglob("*") if p.is_file() and "test-key" in p.read_text(errors="replace")]
     assert f"{skill_dir}:/root/.agents/skills/my-skill:ro" in launch
 
