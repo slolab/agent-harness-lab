@@ -265,7 +265,8 @@ def test_invalid_handler_results_and_io_errors_never_launch(
 
 
 @pytest.mark.parametrize(
-    "harness,provider", [("claude", "anthropic"), ("deepseek", "openrouter"), ("opencode", "anthropic")]
+    "harness,provider",
+    [("claude", "anthropic"), ("deepseek", "openrouter"), ("opencode", "anthropic"), ("codex", "openrouter")],
 )
 def test_native_handlers_report_unmapped_extensions(
     make_config, tmp_path, harness, provider

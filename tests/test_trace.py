@@ -174,7 +174,83 @@ def write_opencode(run: Path) -> list[tuple]:
     ]
 
 
-@pytest.mark.parametrize("harness,write_native", [("claude", write_claude), ("opencode", write_opencode)])
+def write_codex(run: Path) -> list[tuple]:
+    def record(second: int, kind: str, **payload) -> dict:
+        return {"timestamp": at(second), "type": kind, "payload": payload}
+
+    def text(role: str, value: str) -> dict:
+        kind = "output_text" if role == "assistant" else "input_text"
+        return {"type": "message", "role": role, "content": [{"type": kind, "text": value}]}
+
+    def said(value: str) -> dict:
+        return {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": value}]}}
+
+    def usage(response_id: str, total: int, **counts) -> dict:
+        tokens = {"input_tokens": total, "cached_input_tokens": 10, "output_tokens": 9, "reasoning_output_tokens": 1}
+        return {"response_id": response_id, "usage": {**tokens, **counts}}
+
+    main = [
+        record(0, "session_meta", id="S", source="exec"),
+        record(0, "turn_context", model="M"),
+        record(0, "response_item", **text("developer", "skills list")),
+        record(0, "response_item", **text("user", "<environment_context>")),
+        record(0, "response_item", **text("user", "do it")),
+        record(0, "event_msg", **said("do it")),
+        record(1, "response_item", type="reasoning", summary=[{"type": "summary_text", "text": "plan"}], content=None),
+        record(1, "response_item", **text("assistant", "running")),
+        record(1, "response_item", type="function_call", name="exec_command", arguments='{"cmd": "seq 3000"}',
+               call_id="c1"),
+        record(2, "event_msg", type="item_completed", item={
+            "type": "CommandExecution", "id": "c1", "status": "completed", "aggregated_output": FULL_OUTPUT,
+        }),
+        record(2, "response_item", type="function_call_output", call_id="c1", output="Warning: truncated output"),
+        record(2, "token_usage_record", **usage("r1", 20, cache_write_input_tokens=4)),
+        record(2, "token_usage_record", **usage("r1", 20, cache_write_input_tokens=4)),
+        record(2, "event_msg", type="token_count", info={"last_token_usage": usage("r1", 20)["usage"]}),
+        record(4, "response_item", type="reasoning", summary=[{"type": "summary_text", "text": "look it up"}]),
+        record(4, "response_item", type="web_search_call", id="ws1", status="completed",
+               action={"type": "search", "query": "q"}),
+        record(4, "response_item", type="custom_tool_call", name="apply_patch", input="*** Begin Patch", call_id="c2"),
+        record(4, "event_msg", type="item_completed", item={"type": "FileChange", "id": "c2", "status": "failed"}),
+        record(4, "response_item", type="custom_tool_call_output", call_id="c2", output="patch rejected"),
+        record(5, "token_usage_record", **usage("r2", 30)),
+        record(7, "response_item", **text("user", "<subagent_notification>")),
+        record(7, "event_msg", type="task_complete", error={"message": "rate limited"}),
+    ]
+    subagent = [
+        record(3, "session_meta", id="A", source={"subagent": {"thread_spawn": {"parent_thread_id": "S"}}}),
+        record(3, "turn_context", model="M"),
+        record(3, "response_item", **text("user", "sub task")),
+        record(3, "event_msg", **said("sub task")),
+        record(3, "response_item", **text("assistant", "sub done")),
+        record(3, "token_usage_record", **usage("r3", 15, cache_write_input_tokens=0)),
+    ]
+    for name, records in (("rollout-S.jsonl", main), ("rollout-A.jsonl", subagent)):
+        path = run / "codex/sessions/2026/09/24" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    return [
+        ("message", 1, "main", "system", "skills list", None),
+        ("message", 1, "main", "system", "<environment_context>", None),
+        ("message", 1, "main", "user", "do it", None),
+        ("message", 1, "main", "assistant", "running", "plan"),
+        ("tool_call", 1, "main", "exec_command", FULL_OUTPUT, False),
+        ("usage", 1, "main", 6, 9, 10, 4, 1),
+        ("message", 1, "A", "user", "sub task", None),
+        ("message", 1, "A", "assistant", "sub done", None),
+        ("usage", 1, "A", 5, 9, 10, 0, 1),
+        ("message", 1, "main", "assistant", "", "look it up"),
+        ("tool_call", 1, "main", "web_search", None, False),
+        ("tool_call", 1, "main", "apply_patch", "patch rejected", True),
+        ("usage", 1, "main", 20, 9, 10, None, 1),
+        ("message", 2, "main", "system", "<subagent_notification>", None),
+        ("error", 2, "main", "rate limited"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "harness,write_native", [("claude", write_claude), ("opencode", write_opencode), ("codex", write_codex)]
+)
 def test_a2_ac8_converters_follow_the_documented_rules_on_edge_records(tmp_path, harness, write_native):
     expected = write_native(tmp_path)
     turns = [{"index": 1, "started_at": "2026-09-24T09:00:00+00:00"}, {"index": 2, "started_at": at(6)}]
@@ -224,4 +300,4 @@ def test_a2_ac8_schema_matches_the_documentation_and_no_fixture_holds_a_key():
     }
     assert set(declared) == {"common", "message", "tool_call", "usage", "error"}
     assert documented == declared
-    assert not [p for p in FIXTURES.rglob("*") if p.is_file() and b"sk-or-" in p.read_bytes()]
+    assert not [p for p in FIXTURES.parent.rglob("*") if p.is_file() and b"sk-or-" in p.read_bytes()]

@@ -19,8 +19,8 @@ from ahl.config import SUPPORTED_HARNESSES
 
 IMAGES = resources.files("ahl") / "images"
 EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+")
-PACKAGES = {"claude": "@anthropic-ai/claude-code", "opencode": "opencode-ai"}
-PINNED = {"claude": "2.1.273", "opencode": "1.18.31"}
+PACKAGES = {"claude": "@anthropic-ai/claude-code", "opencode": "opencode-ai", "codex": "@openai/codex"}
+PINNED = {"claude": "2.1.273", "opencode": "1.18.31", "codex": "0.156.1"}
 
 
 def resolved_dockerfile(harness: str) -> tuple[dict[str, str], str]:
@@ -99,7 +99,7 @@ def ahl_up_in_pty(*args: str, cwd: Path, command: str, timeout: float = 900) -> 
 
 
 @pytest.mark.docker
-@pytest.mark.parametrize("harness", ["claude", "opencode"])
+@pytest.mark.parametrize("harness", ["claude", "opencode", "codex"])
 def test_a1_ac3_ac4_build_outside_checkout_installs_pinned_or_current_version(tmp_path, harness):
     image = f"agent-harness-lab:{harness}"
     (tmp_path / "pinned.yaml").write_text(yaml.safe_dump({"harness": harness, "harness_version": PINNED[harness]}))

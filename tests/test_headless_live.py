@@ -25,13 +25,14 @@ CONFIGS = {
         "provider": "openrouter",
         "model": {"name": "deepseek/deepseek-v4.1-flash", "parameters": {"provider": PIN}},
     },
+    "codex": {"harness": "codex", "provider": "openrouter", "model": "openai/gpt-6-sol"},
 }
 ASK_USER_TOOL = {"claude": "AskUserQuestion", "opencode": "question"}
 DENIAL = re.compile(r"denied|not allowed|prevents you|no such tool|unavailable tool|not available|disallowed", re.I)
 
 
-def ahl_run(tmp_path: Path, harness: str, *turns: str) -> tuple[subprocess.CompletedProcess, Path]:
-    (tmp_path / "config.yaml").write_text(yaml.safe_dump(CONFIGS[harness]))
+def ahl_run(tmp_path: Path, harness: str, *turns: str, **extra: Any) -> tuple[subprocess.CompletedProcess, Path]:
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(CONFIGS[harness] | extra))
     flags = []
     for index, text in enumerate(turns, start=1):
         (tmp_path / f"t{index}.md").write_text(text)
@@ -158,3 +159,37 @@ def test_a2_ac12_a_subagent_s_tool_calls_and_responses_reach_the_trace(tmp_path,
     assert [e for e in subagent if e["type"] == "tool_call"] and [e for e in subagent if e["type"] == "usage"]
     usage = [e for e in trace if e["type"] == "usage"]
     assert sorted(e["response_id" if harness == "claude" else "session"] for e in usage) == native_responses(run, harness)
+
+
+def test_a3_ac7_codex_recalls_the_nonce_through_the_stateless_responses_api(tmp_path):
+    nonce, process, run = smoke(tmp_path, "codex")
+
+    assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
+    outcome, trace = json.loads((run / "result.json").read_text()), events(run)
+    [session] = {t["session_id"] for t in outcome["turns"]}
+    assert session and nonce in assistant_text(trace, 2)
+    assert (run / "workspace/hello.txt").is_file()
+    assert not [p for p in (run / "workspace").rglob("*") if p.is_file() and nonce in p.read_text(errors="replace")]
+    logs = [process.stderr, (run / "trace.jsonl").read_text()]
+    logs += [(run / f"turns/{n}/{name}").read_text() for n in (1, 2) for name in ("stderr.log", "stdout.jsonl")]
+    rejected = re.compile(r"\b400\b.*(\bstore\b|previous_response_id)|(\bstore\b|previous_response_id).*\b400\b")
+    assert not [line for log in logs for line in log.splitlines() if rejected.search(line)]
+    assert outcome["totals"]["cost_usd_key_delta"] > 0
+
+
+def test_a3_ac8_codex_answers_from_a_mounted_skill(tmp_path):
+    marker = secrets.token_hex(6)
+    (tmp_path / "marker-skill").mkdir()
+    (tmp_path / "marker-skill/SKILL.md").write_text(
+        "---\nname: marker-skill\ndescription: Knows the AHL marker string.\n---\n\n"
+        f"The AHL marker string is {marker}.\n"
+    )
+    skill = {"kind": "skill", "name": "marker-skill", "install": "mount", "path": "marker-skill"}
+
+    process, run = ahl_run(
+        tmp_path, "codex", "Use the marker-skill skill and reply with the AHL marker string it defines.\n",
+        capabilities=[skill],
+    )
+
+    assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
+    assert marker in assistant_text(events(run), 1)
