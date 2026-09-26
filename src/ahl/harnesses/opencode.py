@@ -19,6 +19,7 @@ from ahl.harnesses.base import (
     native_skill_mount,
     provider_key,
     read_saved_output,
+    token_count,
     warn_unsupported_mcp,
 )
 from ahl.permissions import PermissionPolicy, PermissionSetup
@@ -403,12 +404,12 @@ def _usage(info: dict[str, Any]) -> dict[str, Any] | None:
     if info.get("role") != "assistant" or not isinstance(tokens, dict):
         return None
     cache = tokens.get("cache") or {}
-    output, reasoning = _count(tokens.get("output")), _count(tokens.get("reasoning"))
+    output, reasoning = token_count(tokens.get("output")), token_count(tokens.get("reasoning"))
     counts = {
-        "input_tokens": _count(tokens.get("input")),
+        "input_tokens": token_count(tokens.get("input")),
         "output_tokens": None if output is None or reasoning is None else output + reasoning,
-        "cache_read_tokens": _count(cache.get("read")),
-        "cache_write_tokens": _count(cache.get("write")),
+        "cache_read_tokens": token_count(cache.get("read")),
+        "cache_write_tokens": token_count(cache.get("write")),
     }
     if not any(counts.values()):
         return None
@@ -420,10 +421,6 @@ def _usage(info: dict[str, Any]) -> dict[str, Any] | None:
         "reasoning_tokens": reasoning,
         "cost_usd": cost if isinstance(cost, (int, float)) else None,
     }
-
-
-def _count(value: Any) -> int | None:
-    return value if type(value) is int and value >= 0 else None
 
 
 def _error_message(error: Any) -> str:

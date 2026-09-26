@@ -17,6 +17,7 @@ from ahl.skills import wire_delegated_skills
         ("opencode", "opencode"),
         ("agy", "antigravity-cli"),
         ("deepseek", "universal"),
+        ("codex", "codex"),
     ],
 )
 def test_remote_skill_targets_active_harness(harness: str, agent: str, tmp_path: Path):

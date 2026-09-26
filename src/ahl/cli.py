@@ -147,7 +147,7 @@ def run(
     """
     run_config = _load(config, env_file)
     if get_adapter(run_config.harness.name).driver is None:
-        raise typer.BadParameter(f"harness '{run_config.harness.name}' has no headless driver; use claude or opencode")
+        raise typer.BadParameter(f"harness '{run_config.harness.name}' has no headless driver; use claude, codex or opencode")
     run_dir = _run_dir(run_config, runs_dir, name)
     _check_new(run_dir, "choose another --name")
     failure = image = None

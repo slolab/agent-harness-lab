@@ -1,7 +1,7 @@
 # Agent Harness Lab
 
 A sandbox for testing skills and MCP servers against real agent harnesses
-(Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`, DeepSeek Harness) in
+(Gemini CLI, OpenCode, Claude Code, Claude Science, Antigravity/`agy`, DeepSeek Harness, Codex) in
 Docker — isolated and repeatable, not for driving a persistent project.
 Key-based harnesses receive only their selected provider key. Claude Code with
 `provider: anthropic` and Claude Science use a manual Claude-account login. Observability comes
@@ -54,7 +54,7 @@ ahl up -c path/to/config.yaml --env-file path/to/.env --runs-dir path/to/runs
   with `-c` it reads only `harness` and `harness_version`. `ahl up` builds the
   same way unless you pass `--no-build`. Builds skip BuildKit's default
   attestations, so a rebuild without changes keeps the image ID.
-- `ahl up` refuses a Claude Code, OpenCode or DeepSeek image whose
+- `ahl up` refuses a Claude Code, Codex, OpenCode or DeepSeek image whose
   `ahl.harness.version` label is not an exact version, or differs from the
   config's `harness_version`. Rebuild it with `ahl build -c CONFIG`.
 - `--env-file PATH` loads that file, and its keys win over shell variables.
@@ -71,7 +71,7 @@ ahl run -c config.yaml --turn build.md --turn review.md \
 ```
 
 `ahl run` sends each `--turn` file, byte for byte on stdin, as one turn of a
-single native session and exits. Claude Code and OpenCode have headless
+single native session and exits. Claude Code, Codex and OpenCode have headless
 drivers; other harnesses are a usage error. `--timeout` applies to each turn
 (default 3600). `--env-file`, `--runs-dir`, `--name`, `--build` and relative
 paths behave as in `ahl up`; a relative `--turn` resolves against the working
@@ -89,8 +89,9 @@ subagent start, and `error:`. Long items are shortened to one line. Claude Code
 streams its subagents' messages, marked with the id of the tool call that
 started them. OpenCode streams only the main session, so a subagent shows as
 its start, with the child session id; its tool calls appear in `trace.jsonl`
-after the turn. `--quiet` prints only the per-turn summary lines and warnings.
-The run directory is the same either way.
+after the turn. Codex streams only the main thread too: a subagent shows as its
+`spawn_agent` call with the subagent's thread id. `--quiet` prints only the
+per-turn summary lines and warnings. The run directory is the same either way.
 
 | Exit | Run `status` | Reason codes | When |
 |---|---|---|---|
@@ -164,7 +165,7 @@ Two files, clean split:
 - `config.yaml` — **non-secret selection**.
 
 ```yaml
-harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek
+harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek | codex
 provider: gemini      # anthropic | openai | gemini | vertex | openrouter
 model: gemini-3.5-flash
 workspace: ./projects/demo
@@ -173,7 +174,7 @@ workspace: ./projects/demo
 | provider  | key env             |
 |-----------|---------------------|
 | anthropic | `ANTHROPIC_API_KEY` (OpenCode only; not Claude login harnesses) |
-| openrouter | `OPENROUTER_API_KEY` (Claude Code, OpenCode, DeepSeek) |
+| openrouter | `OPENROUTER_API_KEY` (Claude Code, Codex, OpenCode, DeepSeek) |
 | openai    | `OPENAI_API_KEY`    |
 | gemini    | `GEMINI_API_KEY`    |
 | vertex    | `GOOGLE_API_KEY`    |
@@ -182,7 +183,7 @@ workspace: ./projects/demo
 mapping (e.g. Vertex needs `project`/`location`). See `config.example.yaml`
 for the full annotated reference, including:
 
-- **`harness_version`** — for `claude` and `opencode` only, e.g.
+- **`harness_version`** — for `claude`, `codex` and `opencode` only, e.g.
   `harness_version: 2.1.273`: the image installs exactly that version.
   Without it, each build installs the current release.
 - **`workspace`** — a *template*, not a live project. By default it's
@@ -230,6 +231,7 @@ permissions:
 | Harness | Native web-tool denials |
 |---|---|
 | Claude Code (account login or OpenRouter) | Enforced through managed settings |
+| Codex | `web_search = "disabled"` in the seeded `config.toml`; Codex has no separate fetch tool, so this also covers `webfetch` |
 | DeepSeek | Enforced by a global native tool guard |
 | OpenCode | Enforced through `permission` in the seeded `opencode.json` |
 | Gemini, Antigravity, Claude Science | Warning; requested denials are not applied |
@@ -249,6 +251,7 @@ available. See [permissions and handler extensions](docs/permissions.md).
 | claude         | Claude account login or OpenRouter key                | `claude` (or `--model <model>`) |
 | claude-science | Claude account login; x64 Linux     | `claude-science serve --no-browser --host 0.0.0.0 --port 8000` |
 | deepseek       | OpenRouter API key | `ahl-deepseek --port 3080` |
+| codex          | OpenRouter API key | `codex` |
 | agy            | gemini or vertex API key                 | `agy` |
 
 Auth is either pre-seeded or completed interactively per harness; `ahl up`
@@ -256,11 +259,11 @@ prints the exact launch command and harness-specific hints. Add a harness by
 adding `src/ahl/images/<harness>.Dockerfile` and a `src/ahl/harnesses/<harness>.py`
 adapter — see `CLAUDE.md`.
 
-No Dockerfile hard-codes a harness version. For Claude Code and OpenCode,
+No Dockerfile hard-codes a harness version. For Claude Code, Codex and OpenCode,
 `ahl build` installs the config's `harness_version`, or else the current npm
 release, which it looks up before building. DeepSeek installs the version in
 its npm lockfile. The version is passed as the `HARNESS_VERSION` build argument,
-which these three Dockerfiles require, and recorded in the image label
+which these four Dockerfiles require, and recorded in the image label
 `ahl.harness.version`. Gemini CLI, agy and
 Claude Science install their latest release and carry no version label. uv is
 not pinned. Every image carries the label `ahl.harness=<name>`.
@@ -272,7 +275,7 @@ workspace mode, timestamp, permissions, container name, unsupported model
 parameters). It also records provenance: `ahl`
 (version, plus `git_sha` and `git_dirty` when AHL runs from a git checkout,
 otherwise null) and `image` (name, ID and `ahl.harness.version` label of the
-image the container started from). **gemini**, **opencode**, **claude**, and **deepseek** persist
+image the container started from). **gemini**, **opencode**, **claude**, **codex** and **deepseek** persist
 their own session state under `runs/<id>/` and get a normalized `trace.json`
 on exit (sessions, messages, tool calls). Claude Science tracing is an
 explicit non-goal for its initial harness; **agy** still has no confirmed log
@@ -299,7 +302,7 @@ sign-in, skill upload, sandbox fallback, and the Linux acceptance checks.
 
 Set `provider: openrouter`, `OPENROUTER_API_KEY` in `.env`, and an explicit
 provider-native `model` such as `qwen/qwen3.7-flash`. Supported harnesses are
-Claude Code, OpenCode, and DeepSeek; other combinations fail during config loading.
+Claude Code, Codex, OpenCode, and DeepSeek; other combinations fail during config loading.
 Model IDs are preserved exactly. OpenCode adds its outer routing prefix:
 `openrouter/auto` becomes `openrouter/openrouter/auto` inside OpenCode.
 For OpenCode, `model.parameters.provider` reaches OpenRouter's
@@ -313,6 +316,30 @@ account-login run to OpenRouter, run `/logout` inside Claude and restart it.
 AHL preserves saved credentials. OpenRouter [guarantees Claude compatibility
 with Anthropic's first-party provider](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration);
 AHL does not restrict model choices.
+
+### Codex
+
+```yaml
+harness: codex
+provider: openrouter
+model: openai/gpt-6-sol
+```
+
+Codex runs only with `provider: openrouter` and an explicit model, through
+OpenRouter's Responses API. OpenRouter keeps no state between requests; Codex
+sends `store: false` and the full history, so resumed turns keep their context.
+AHL seeds `runs/<id>/codex/config.toml` (mounted as `~/.codex`) with the
+OpenRouter provider, command auth from `OPENROUTER_API_KEY`, no approvals or
+sandbox, and plugins and shell snapshots off, so the key is never written to
+disk. Start it with `codex`. `ahl run` uses `codex exec --json` and, from turn
+2, `codex exec resume <thread id>`. A turn fails on `turn.failed` or on an
+`error` the turn does not recover from; a reconnect notice before the turn
+completes shows in the live view only. `model.parameters.provider` is not
+applied.
+
+Mount-mode skills go to `~/.agents/skills/<name>`; delegated installs use the
+installer agent `codex`, which writes to `~/.codex/skills`. Both are skill roots
+in Codex 0.157.1. Web search works through OpenRouter when allowed.
 
 ### DeepSeek browser
 

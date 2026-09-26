@@ -2,6 +2,7 @@
 
 import json
 import shlex
+import tomllib
 
 import pytest
 import yaml
@@ -10,7 +11,7 @@ from ahl.config import ConfigError, load_config
 from ahl.harnesses import get_adapter
 
 
-@pytest.mark.parametrize("harness", ["claude", "opencode", "deepseek"])
+@pytest.mark.parametrize("harness", ["claude", "opencode", "deepseek", "codex"])
 def test_openrouter_route_keeps_native_model_and_secret_in_env(
     make_config, tmp_path, harness
 ):
@@ -52,6 +53,8 @@ def test_openrouter_route_keeps_native_model_and_secret_in_env(
             assert rows["llm-pi-ai"]["providers"]["openrouter"]["models"] == [
                 {"id": model}
             ]
+        if harness == "codex":
+            assert tomllib.loads((run / "codex/config.toml").read_text())["model"] == model
         if harness == "opencode":
             assert shlex.split(adapter.start_command(config)) == [
                 "opencode",

@@ -18,7 +18,7 @@ import yaml
 from ahl.config import HARNESS_NPM_PACKAGES, PROVIDER_KEY_ENV, RunConfig, load_config
 
 _real_run = subprocess.run
-NPM_RELEASES = {"@anthropic-ai/claude-code": "2.1.281", "opencode-ai": "1.18.32"}
+NPM_RELEASES = {"@anthropic-ai/claude-code": "2.1.281", "opencode-ai": "1.18.32", "@openai/codex": "0.157.1"}
 KEY_URL = "https://openrouter.ai/api/v1/key"
 
 

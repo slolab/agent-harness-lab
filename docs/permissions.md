@@ -16,6 +16,7 @@ configuration errors.
 | Harness | Enforcement |
 |---|---|
 | Claude Code | `websearch` → `WebSearch`; `webfetch` → `WebFetch` |
+| Codex | `websearch` or `webfetch` sets `web_search = "disabled"` in the seeded `config.toml`; Codex has no separate fetch tool |
 | DeepSeek | `websearch` → `web_search`; `webfetch` → `web_fetch` |
 | OpenCode | `websearch` and `webfetch` set to `deny` under `permission` in the seeded `opencode.json` |
 | Gemini, Antigravity, Claude Science | Unsupported; one warning lists unapplied operations and reasons |

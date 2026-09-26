@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a0dcca-61f2-70f1-b228-40dfceb8dd73"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll have one subagent run `ls /` and count the entries."}}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"01a0dcca-61f2-70f1-b228-40dfceb8dd73","receiver_thread_ids":[],"prompt":"Run `ls /` using your shell tool. Count the entries in its output and report only the number. Do not ask another agent.","agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"01a0dcca-61f2-70f1-b228-40dfceb8dd73","receiver_thread_ids":["01a0dcca-693d-7860-9edb-eb028dd13955"],"prompt":"Run `ls /` using your shell tool. Count the entries in its output and report only the number. Do not ask another agent.","agents_states":{"01a0dcca-693d-7860-9edb-eb028dd13955":{"status":"pending_init","message":null}},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a0dcca-61f2-70f1-b228-40dfceb8dd73","receiver_thread_ids":["01a0dcca-693d-7860-9edb-eb028dd13955"],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a0dcca-61f2-70f1-b228-40dfceb8dd73","receiver_thread_ids":["01a0dcca-693d-7860-9edb-eb028dd13955"],"prompt":null,"agents_states":{"01a0dcca-693d-7860-9edb-eb028dd13955":{"status":"completed","message":"20"}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"20"}}
+{"type":"turn.completed","usage":{"input_tokens":35459,"cached_input_tokens":23365,"cache_write_input_tokens":11890,"output_tokens":139,"reasoning_output_tokens":14}}

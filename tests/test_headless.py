@@ -19,6 +19,8 @@ from conftest import Turn, interrupt
 STATUS = Path(__file__).parent / "fixtures/a2/status"
 CLAUDE = {"harness": "claude", "provider": "openrouter", "model": "anthropic/claude-sonnet-5"}
 OPENCODE = {"harness": "opencode", "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash"}
+CODEX = {"harness": "codex", "provider": "openrouter", "model": "openai/gpt-6-sol"}
+HARNESSES = {"claude": CLAUDE, "opencode": OPENCODE, "codex": CODEX}
 PIN = {"only": ["deepinfra"], "quantizations": ["fp8"], "allow_fallbacks": False}
 OPENCODE_PERMISSION_KEYS = (
     "read", "edit", "glob", "grep", "list", "bash", "task", "external_directory",
@@ -41,7 +43,7 @@ def recorded(harness: str, name: str) -> str:
 
 def session_id(stdout: str) -> str:
     events = [json.loads(line) for line in stdout.splitlines()]
-    [sid] = {e.get("session_id") or e.get("sessionID") for e in events} - {None}
+    [sid] = {e.get("session_id") or e.get("sessionID") or e.get("thread_id") for e in events} - {None}
     return sid
 
 
@@ -347,19 +349,25 @@ def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeyp
         ("opencode", "error", 0, "failed", "harness_reported_error"),
         ("opencode", "no_text", 0, "failed", "no_assistant_output"),
         ("opencode", "http_429", 1, "failed", "provider_error"),
+        ("codex", "bad_model", 1, "failed", "harness_exit"),
+        ("codex", "bad_model", 0, "failed", "harness_reported_error"),
+        ("codex", "unfinished", 0, "failed", "harness_reported_error"),
+        ("codex", "no_text", 0, "failed", "no_assistant_output"),
+        ("codex", "http_429", 1, "failed", "provider_error"),
+        ("codex", "reconnect", 0, "completed", None),
     ],
 )
-def test_a2_ac1_ac7_turn_status_follows_recorded_harness_output(
+def test_a2_ac1_ac7_a3_ac4_turn_status_follows_recorded_harness_output(
     tmp_path, monkeypatch, docker, harness, recording, exit_code, status, reason
 ):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    config = write_config(tmp_path / "config.yaml", {"claude": CLAUDE, "opencode": OPENCODE}[harness])
+    config = write_config(tmp_path / "config.yaml", HARNESSES[harness])
     stdout = recorded(harness, recording)
     docker.turns = [Turn(exit_code=exit_code, stdout=stdout)]
 
     result = ahl("run", "-c", config, *prompts(tmp_path, 1), "--no-build", "--name", "r")
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == (0 if status == "completed" else 1), result.output
     outcome = load(tmp_path / "runs/r/result.json")
     [turn] = outcome["turns"]
     assert (turn["status"], turn["exit_code"], turn["session_id"]) == (status, exit_code, session_id(stdout))
@@ -370,31 +378,50 @@ def test_a2_ac1_ac7_turn_status_follows_recorded_harness_output(
 
 CLAUDE_AGENT = "toolu_019dWgHLefT4G9zZ487LDnZt"
 OPENCODE_CHILD = "ses_f26393544ffeNnfJMnbRjbJWuZ"
+CODEX_CHILD = "01a0dcca-693d-7860-9edb-eb028dd13955"
+PROVIDER_FAILURE = {"subagent": "completed", "http_429": "failed (provider_error)"}
 
 
-@pytest.mark.parametrize("harness,expected", [
-    ("claude", [
+@pytest.mark.parametrize("harness,turns,expected", [
+    ("claude", PROVIDER_FAILURE, [
         ("main", "subagent", f"{CLAUDE_AGENT} general-purpose: List root directory entries"),
         (CLAUDE_AGENT, "tool", 'Bash {"command": "ls /"'),
         ("main", "text", "The subagent ran `ls /` and saw 14 entries."),
         ("main", "error", "API Error: Request rejected (429)"),
         ("main", "error", "API Error: Request rejected (429)"),
     ]),
-    ("opencode", [
+    ("opencode", PROVIDER_FAILURE, [
         ("main", "subagent", f"{OPENCODE_CHILD} general: Run ls and count entries"),
         ("main", "text", "20"),
         ("main", "error", "Rate limit exceeded"),
     ]),
+    ("codex", {"subagent": "completed", "reconnect": "completed", "bad_model": "failed (harness_exit)"}, [
+        ("main", "text", "I’ll have one subagent run `ls /`"),
+        ("main", "subagent", f"{CODEX_CHILD} Run `ls /` using your shell tool"),
+        ("main", "tool", f'wait ["{CODEX_CHILD}"]'),
+        ("main", "text", "20"),
+        ("main", "error", "Reconnecting... 1/5 (unexpected status 503 Service Unavailable"),
+        ("main", "tool", "web_search codex stream reconnect"),
+        ("main", "text", "hi"),
+        ("main", "error", "Model metadata for `openai/gpt-0-nonexistent` not found"),
+        ("main", "error", '{"error":{"message":"openai/gpt-0-nonexistent is not a valid model ID"'),
+        ("main", "error", '{"error":{"message":"openai/gpt-0-nonexistent is not a valid model ID"'),
+    ]),
 ])
-def test_a2_ac11_live_view_shows_recorded_turns_in_order_unless_quiet(tmp_path, monkeypatch, docker, harness, expected):
+def test_a2_ac11_live_view_shows_recorded_turns_in_order_unless_quiet(
+    tmp_path, monkeypatch, docker, harness, turns, expected
+):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    config = write_config(tmp_path / "config.yaml", {"claude": CLAUDE, "opencode": OPENCODE}[harness])
+    config = write_config(tmp_path / "config.yaml", HARNESSES[harness])
     subagent = recorded(harness, "subagent")
     view = re.compile(r"  \[(\S+)\] (\w+): (.*)")
     outputs = {}
     for name in ("loud", "quiet"):
-        docker.turns = [Turn(stdout=subagent), Turn(exit_code=1, stdout=recorded(harness, "http_429"))]
-        result = ahl("run", "-c", config, *prompts(tmp_path, 2), "--no-build", "--name", name,
+        docker.turns = [
+            Turn(exit_code=int(summary != "completed"), stdout=recorded(harness, recording))
+            for recording, summary in turns.items()
+        ]
+        result = ahl("run", "-c", config, *prompts(tmp_path, len(turns)), "--no-build", "--name", name,
                      *(["--quiet"] if name == "quiet" else []))
         assert result.exit_code == 1, result.output
         assert (tmp_path / "runs" / name / "turns/1/stdout.jsonl").read_text() == subagent
@@ -404,4 +431,5 @@ def test_a2_ac11_live_view_shows_recorded_turns_in_order_unless_quiet(tmp_path, 
     assert [(agent, kind) for agent, kind, _ in shown] == [(agent, kind) for agent, kind, _ in expected]
     assert all(detail.startswith(fragment) for (_, _, detail), (_, _, fragment) in zip(shown, expected))
     assert not [line for line in outputs["quiet"].output.splitlines() if view.fullmatch(line)]
-    assert outputs["quiet"].stdout.splitlines()[:2] == ["Turn 1: completed", "Turn 2: failed (provider_error)"]
+    summaries = [f"Turn {index}: {summary}" for index, summary in enumerate(turns.values(), start=1)]
+    assert outputs["quiet"].stdout.splitlines()[:len(turns)] == summaries

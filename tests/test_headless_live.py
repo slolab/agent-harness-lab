@@ -25,13 +25,14 @@ CONFIGS = {
         "provider": "openrouter",
         "model": {"name": "deepseek/deepseek-v4.1-flash", "parameters": {"provider": PIN}},
     },
+    "codex": {"harness": "codex", "provider": "openrouter", "model": "openai/gpt-6-sol"},
 }
 ASK_USER_TOOL = {"claude": "AskUserQuestion", "opencode": "question"}
 DENIAL = re.compile(r"denied|not allowed|prevents you|no such tool|unavailable tool|not available|disallowed", re.I)
 
 
-def ahl_run(tmp_path: Path, harness: str, *turns: str) -> tuple[subprocess.CompletedProcess, Path]:
-    (tmp_path / "config.yaml").write_text(yaml.safe_dump(CONFIGS[harness]))
+def ahl_run(tmp_path: Path, harness: str, *turns: str, **extra: Any) -> tuple[subprocess.CompletedProcess, Path]:
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(CONFIGS[harness] | extra))
     flags = []
     for index, text in enumerate(turns, start=1):
         (tmp_path / f"t{index}.md").write_text(text)
@@ -63,8 +64,8 @@ def assistant_text(trace: list[dict[str, Any]], turn: int) -> str:
     return "\n".join(e["text"] for e in trace if e["type"] == "message" and e["role"] == "assistant" and e["turn"] == turn)
 
 
-@pytest.mark.parametrize("harness", ["claude", "opencode"])
-def test_a2_ac9_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harness):
+@pytest.mark.parametrize("harness", ["claude", "opencode", "codex"])
+def test_a2_ac9_a3_ac7_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harness):
     nonce, process, run = smoke(tmp_path, harness)
 
     assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
@@ -81,7 +82,7 @@ def test_a2_ac9_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harnes
         assert not [e for e in trace if e["type"] == "tool_call" and e["is_error"]]
         results = [json.loads(line) for n in (1, 2) for line in (run / f"turns/{n}/stdout.jsonl").read_text().splitlines()]
         assert [r["permission_denials"] for r in results if r["type"] == "result"] == [[], []]
-    else:
+    elif harness == "opencode":
         with sqlite3.connect(run / "opencode/data/opencode.db") as db:
             rows = [json.loads(data) for (data,) in db.execute("SELECT data FROM message")]
         tokens = [r["tokens"] for r in rows if r["role"] == "assistant"]
@@ -93,6 +94,11 @@ def test_a2_ac9_two_turn_smoke_recalls_the_nonce_in_one_session(tmp_path, harnes
         }
         assert {key: outcome["totals"][key] for key in expected} == expected
         assert expected["input_tokens"] > 0 and expected["output_tokens"] > 0
+    else:
+        logs = [process.stderr, (run / "trace.jsonl").read_text()]
+        logs += [(run / f"turns/{n}/{name}").read_text() for n in (1, 2) for name in ("stderr.log", "stdout.jsonl")]
+        rejected = re.compile(r"\b400\b.*(\bstore\b|previous_response_id)|(\bstore\b|previous_response_id).*\b400\b")
+        assert not [line for log in logs for line in log.splitlines() if rejected.search(line)]
 
 
 @pytest.mark.parametrize("harness", ["claude", "opencode"])
@@ -158,3 +164,21 @@ def test_a2_ac12_a_subagent_s_tool_calls_and_responses_reach_the_trace(tmp_path,
     assert [e for e in subagent if e["type"] == "tool_call"] and [e for e in subagent if e["type"] == "usage"]
     usage = [e for e in trace if e["type"] == "usage"]
     assert sorted(e["response_id" if harness == "claude" else "session"] for e in usage) == native_responses(run, harness)
+
+
+def test_a3_ac8_codex_answers_from_a_mounted_skill(tmp_path):
+    marker = secrets.token_hex(6)
+    (tmp_path / "marker-skill").mkdir()
+    (tmp_path / "marker-skill/SKILL.md").write_text(
+        "---\nname: marker-skill\ndescription: Knows the AHL marker string.\n---\n\n"
+        f"The AHL marker string is {marker}.\n"
+    )
+    skill = {"kind": "skill", "name": "marker-skill", "install": "mount", "path": "marker-skill"}
+
+    process, run = ahl_run(
+        tmp_path, "codex", "Use the marker-skill skill and reply with the AHL marker string it defines.\n",
+        capabilities=[skill],
+    )
+
+    assert process.returncode == 0, process.stdout[-3000:] + process.stderr[-3000:]
+    assert marker in assistant_text(events(run), 1)
