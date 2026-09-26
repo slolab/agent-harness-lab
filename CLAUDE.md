@@ -126,7 +126,7 @@ These rules apply to every agent and subagent. They are the same in `slolab/biot
 - Never commit to `main`. Only Vlad merges, by squash merge.
 - One milestone per branch, named `<id>-<slug>`, for example `a1-portable-runs`. Work in a worktree at `../.worktrees/<repo>/<branch>`, or use the Agent tool's worktree isolation.
 - A new worktree has no `.env`; before running live tests, symlink it from the main checkout with `ln -s /home/vladsam42/Projects/biotope_project/agent-harness-lab/.env .env`.
-- Open a draft PR as soon as the branch has its first commit. Title it `<ID>: <title>` and fill in the PR template.
+- Open a draft PR as soon as the branch has its first commit. Title it `<ID>: <title>` and fill in the PR template. From that first commit, the PR lists every acceptance criterion of the spec with its tier and planned test; update the status as tests go green. The implementation follows the criteria, never the other way round.
 - When a bench milestone needs an AHL change, the AHL PR merges first. Bench then moves the `vendor/agent-harness-lab` submodule to a commit on AHL's `main`, never to an unmerged branch.
 - Use Conventional Commits that name the milestone, for example `feat(a1): resolve paths against the config file`.
 

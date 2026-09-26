@@ -8,7 +8,9 @@ Milestone: <ID> · Spec: `docs/specs/<id>-<slug>.md` · Tracking: slolab/biotope
 
 | AC | Test(s) | Tier | Status |
 |---|---|---|---|
-| AC-1 | `test_<id>_ac1_…` | unit | <pass/fail> |
+| AC-1 | `test_…` (planned or written) | unit | pending / failing / passing |
+
+List every acceptance criterion of the spec from the first commit.
 
 ## Evidence
 
