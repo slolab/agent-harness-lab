@@ -26,7 +26,6 @@ PROVIDER_ERROR = re.compile(r"\bstatus:? (429|5\d\d)\b")
 TOOL_INPUTS = {
     "command_execution": "command",
     "file_change": "changes",
-    "mcp_tool_call": "arguments",
     "web_search": "query",
     "collab_tool_call": "receiver_thread_ids",
 }
@@ -35,6 +34,7 @@ OUTPUTS = {"function_call_output", "custom_tool_call_output"}
 FAILED = {"completed": False, "failed": True, "declined": True}
 # Command auth, unlike env_key, makes Codex load OpenRouter's model catalogue instead of fallback metadata.
 # plugins = false stops Codex cloning its plugin marketplace, about 100 MB, into every run's home.
+# A shell snapshot holds the environment, key included, and a killed turn leaves it in the run directory.
 CONFIG = """\
 model_provider = "openrouter"
 model = {model}
@@ -43,6 +43,7 @@ sandbox_mode = "danger-full-access"
 
 [features]
 plugins = false
+shell_snapshot = false
 
 [model_providers.openrouter]
 name = "OpenRouter"
@@ -79,12 +80,14 @@ class CodexDriver:
 
     def report(self, stdout: str) -> TurnReport:
         events = json_lines(stdout)
-        errors = list(dict.fromkeys(_error(e) for e in events if e.get("type") in ("error", "turn.failed")))
+        completed = max((i for i, e in enumerate(events) if e.get("type") == "turn.completed"), default=-1)
+        errors = [_error(e) for e in events[completed + 1:] if e.get("type") in ("error", "turn.failed")]
+        items = [_item(e) for e in events]
         return TurnReport(
             session_id=next((e["thread_id"] for e in events if isinstance(e.get("thread_id"), str)), None),
-            error="; ".join(errors) if errors else None,
+            error=errors[-1] if errors else None,
             provider_error=any(PROVIDER_ERROR.search(error) for error in errors),
-            replied=any(_item(e).get("type") == "agent_message" and str(_item(e).get("text")).strip() for e in events),
+            replied=any(i.get("type") == "agent_message" and str(i.get("text") or "").strip() for i in items),
         )
 
     def view(self, record: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -107,7 +110,7 @@ class CodexDriver:
 
     def trace(self, run_dir: Path) -> list[dict[str, Any]]:
         events = []
-        for path in _rollouts(_home(run_dir)):
+        for path in sorted((_home(run_dir) / "sessions").glob("**/rollout-*.jsonl")):
             events += _rollout_events(json_lines(path.read_text(errors="replace")))
         return sorted(events, key=lambda trace_event: trace_event["ts"] or "")
 
@@ -134,14 +137,7 @@ class CodexAdapter:
         ]
 
     def parse_trace(self, run_dir: Path) -> dict[str, Any]:
-        home = _home(run_dir)
-        sessions = []
-        for path in _rollouts(home):
-            meta = next((r["payload"] for r in json_lines(path.read_text(errors="replace"))
-                         if r.get("type") == "session_meta" and isinstance(r.get("payload"), dict)), {})
-            fields = ("id", "source", "cli_version", "model_provider")
-            sessions.append({"file": str(path.relative_to(home)), **{name: meta.get(name) for name in fields}})
-        return {"paths": {"home": str(home)}, "sessions": sessions}
+        return {"paths": {"home": str(_home(run_dir))}, "events": self.driver.trace(run_dir)}
 
     def start_command(self, config: RunConfig) -> str:
         return "codex"
@@ -155,10 +151,6 @@ class CodexAdapter:
 
 def _home(run_dir: Path) -> Path:
     return run_dir / "codex"
-
-
-def _rollouts(home: Path) -> list[Path]:
-    return sorted((home / "sessions").glob("**/rollout-*.jsonl"))
 
 
 def _item(record: dict[str, Any]) -> dict[str, Any]:
@@ -186,7 +178,6 @@ def _rollout_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                if payload.get("type") in OUTPUTS}
     events: list[dict[str, Any]] = []
     reasoning: list[tuple[str | None, str]] = []
-    responses: set[str] = set()
     session, agent, model = None, "main", None
 
     def take_reasoning() -> str | None:
@@ -227,9 +218,7 @@ def _rollout_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             emit("tool_call", ts, id=payload.get("id"), tool="web_search",
                  input=action if isinstance(action, dict) else {}, output=None,
                  is_error=FAILED.get(payload.get("status")))
-        elif kind == "token_usage_record" and payload.get("response_id") not in responses:
-            if isinstance(payload.get("response_id"), str):
-                responses.add(payload["response_id"])
+        elif kind == "token_usage_record":
             emit("usage", ts, model=model, **_usage(payload))
         elif kind == "event_msg" and part == "task_complete" and isinstance(payload.get("error"), dict):
             emit("error", ts, message=str(payload["error"].get("message")))
