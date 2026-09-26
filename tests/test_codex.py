@@ -25,8 +25,8 @@ IMAGES = resources.files("ahl") / "images"
 MODEL = "openai/gpt-6-sol"
 CODEX = {"harness": "codex", "provider": "openrouter", "model": MODEL}
 CACHED_RESPONSE = {
-    "model": MODEL, "response_id": "gen-1790409856-mGFt8XhmIDLp1Rcl6pnQ",
-    "input_tokens": 11841 - 11618 - 155, "output_tokens": 5, "cache_read_tokens": 11618, "cache_write_tokens": 155,
+    "model": MODEL, "response_id": "gen-1790411646-NeYVj0IYSw6PdCBFpeXN",
+    "input_tokens": 11838 - 11620 - 150, "output_tokens": 5, "cache_read_tokens": 11620, "cache_write_tokens": 150,
     "reasoning_tokens": 0, "cost_usd": None,
 }
 
