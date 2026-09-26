@@ -10,15 +10,15 @@
 # this file (or `--env-file PATH`) and writes runs to runs/ next to this file
 # (or `--runs-dir DIR`).
 
-harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek
+harness: gemini       # gemini | opencode | agy | claude | claude-science | deepseek | codex
 provider: gemini      # anthropic | openai | gemini | vertex | openrouter
 model: gemini-3.5-flash
-# Claude Code and OpenCode only: install exactly this version. Without it,
+# Claude Code, Codex and OpenCode only: install exactly this version. Without it,
 # every build installs the release current at build time.
 # harness_version: 2.1.273
 
 # --- Native web-tool permissions (run-wide, including agents) -----------
-# Claude Code, OpenCode and DeepSeek enforce these. Gemini, Antigravity
+# Claude Code, Codex, OpenCode and DeepSeek enforce these. Gemini, Antigravity
 # and Claude Science warn and continue with these denials unapplied.
 # Omit this block or use deny: [] for no AHL denials. Resume replaces old rules.
 # Only websearch and webfetch are valid; shell HTTP/network access is unchanged.
@@ -51,7 +51,7 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 # --- Capabilities: skills/MCP servers preinstalled into the harness ----
 # See docs/capability-format.md for what a bundle looks like.
 #
-# Skill discovery is native for claude, gemini, opencode, agy, and deepseek. AHL maps
+# Skill discovery is native for claude, codex, gemini, opencode, agy, and deepseek. AHL maps
 # local mount-mode skills directly into each harness's native skill directory.
 # All other skill installs are delegated to `npx skills`, globally and
 # non-interactively, with the installer agent inferred from `harness`.
@@ -169,12 +169,19 @@ workspace: ./projects/demo   # bare string -> install: copy (the default)
 #   model: claude-sonnet-4-6
 #   # or provider: vertex + model: gemini-3.5-flash -> google-vertex/gemini-3.5-flash
 
-# OpenRouter (Claude Code, OpenCode, or DeepSeek; requires OPENROUTER_API_KEY):
+# OpenRouter (Claude Code, Codex, OpenCode, or DeepSeek; requires OPENROUTER_API_KEY):
 #   harness: claude
 #   provider: openrouter
 #   model: qwen/qwen3.7-flash   # exact provider-native ID; explicit model required
 #   # OpenCode adds its own prefix: openrouter/qwen/qwen3.7-flash
 #   # model: openrouter/auto becomes openrouter/openrouter/auto in OpenCode.
+#
+# Codex (OpenRouter only; requires OPENROUTER_API_KEY and an explicit model):
+#   harness: codex
+#   provider: openrouter
+#   model: openai/gpt-6-sol
+#   # harness_version: 0.157.1   # optional; otherwise the release current at build
+#   # Codex cannot apply model.parameters.provider and warns.
 #
 # DeepSeek official browser UI (OpenRouter only):
 #   harness:

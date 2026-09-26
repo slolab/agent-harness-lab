@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     from ahl.workspace import Workspace
 
 
-SUPPORTED_HARNESSES = {"claude", "claude-science", "opencode", "agy", "gemini", "deepseek"}
-HARNESS_NPM_PACKAGES = {"claude": "@anthropic-ai/claude-code", "opencode": "opencode-ai"}
+SUPPORTED_HARNESSES = {"claude", "claude-science", "codex", "opencode", "agy", "gemini", "deepseek"}
+HARNESS_NPM_PACKAGES = {"claude": "@anthropic-ai/claude-code", "codex": "@openai/codex", "opencode": "opencode-ai"}
 EXACT_VERSION = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?")
 
 
@@ -105,7 +105,7 @@ def parse_harness_version(value: Any, harness: str) -> str | None:
     if value is None:
         return None
     if harness not in HARNESS_NPM_PACKAGES:
-        allowed = " and ".join(sorted(HARNESS_NPM_PACKAGES))
+        allowed = ", ".join(sorted(HARNESS_NPM_PACKAGES))
         raise ConfigError(f"harness_version: only {allowed} accept a version, not '{harness}'")
     if not isinstance(value, str) or not EXACT_VERSION.fullmatch(value):
         raise ConfigError(f"harness_version: expected an exact version such as 2.1.273, got {value!r}")
@@ -140,8 +140,10 @@ def load_config(config_path: Path, env_file: Path | None = None) -> RunConfig:
 
     if harness.name == "claude" and provider.name not in {"anthropic", "openrouter"}:
         raise ConfigError("Harness 'claude' requires provider: anthropic or openrouter")
+    if harness.name == "codex" and provider.name != "openrouter":
+        raise ConfigError("Harness 'codex' requires provider: openrouter")
     if provider.name == "openrouter":
-        if harness.name not in {"claude", "opencode", "deepseek"}:
+        if harness.name not in {"claude", "codex", "opencode", "deepseek"}:
             raise ConfigError(f"Harness '{harness.name}' does not support provider: openrouter")
         if not model.name.strip():
             raise ConfigError("provider: openrouter requires an explicit model")

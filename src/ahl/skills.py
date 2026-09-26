@@ -17,6 +17,7 @@ INSTALLER_AGENTS = {
     "opencode": "opencode",
     "agy": "antigravity-cli",
     "deepseek": "universal",
+    "codex": "codex",
 }
 
 

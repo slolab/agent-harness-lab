@@ -6,6 +6,7 @@ from ahl.harnesses.agy import AgyAdapter
 from ahl.harnesses.base import HarnessAdapter
 from ahl.harnesses.claude import ClaudeAdapter
 from ahl.harnesses.claude_science import ClaudeScienceAdapter
+from ahl.harnesses.codex import CodexAdapter
 from ahl.harnesses.deepseek import DeepSeekAdapter
 from ahl.harnesses.gemini import GeminiAdapter
 from ahl.harnesses.opencode import OpenCodeAdapter
@@ -16,6 +17,7 @@ _ADAPTERS: dict[str, HarnessAdapter] = {
     "opencode": OpenCodeAdapter(),
     "claude": ClaudeAdapter(),
     "claude-science": ClaudeScienceAdapter(),
+    "codex": CodexAdapter(),
     "agy": AgyAdapter(),
 }
 

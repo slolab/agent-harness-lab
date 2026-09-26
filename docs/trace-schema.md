@@ -126,3 +126,40 @@ Messages of a child session (one with a `parent_id`) take that session id as
 - `response_id` is null; OpenCode does not store it. `model` is `modelID`.
 - OpenCode's request for a session title is not stored as a message, so its
   tokens appear in the key delta but in no `usage` event.
+
+## Codex
+
+Source: the rollout files `codex/sessions/**/rollout-*.jsonl` in the run's
+`CODEX_HOME` (Codex 0.157.1). Each thread has its own file. A subagent's
+thread starts with a `session_meta` whose `source` is an object
+(`{"subagent": {"thread_spawn": …}}`); its events take the thread id as
+`session` and `agent`. The main thread's `agent` is `main`. Events from all
+files are ordered by timestamp.
+
+- `response_item` records give the messages and tool calls. A `developer`
+  message, and a `user` message that is not the text of a `UserMessage` item,
+  such as the environment context, AGENTS.md or a subagent notification, is
+  `system`. Reasoning summaries become the `reasoning` of the next assistant
+  message; reasoning with no assistant message after it becomes an assistant
+  message with empty `text`.
+- A `function_call` or `custom_tool_call` is a `tool_call` with its `call_id`,
+  name and parsed `arguments` (or `input`). Its output is the
+  `aggregated_output` of the completed item with the same id, since Codex
+  truncates what it returns to the model, else the matching
+  `function_call_output` or `custom_tool_call_output`. `is_error` comes from
+  that item's `status`: `completed` is false, `failed` and `declined` are true,
+  otherwise null. A `web_search_call` is a `web_search` tool call with its
+  `action` as input and a null output.
+- Usage: one `usage` event per `token_usage_record`, deduplicated by
+  `response_id`. Codex repeats each response's usage in an `event_msg`
+  `token_count`, which is ignored. `model` is the current `turn_context`
+  model.
+- Tokens: Codex's `input_tokens` include cached and cache-written input.
+  `input_tokens` = `input_tokens − cached_input_tokens −
+  cache_write_input_tokens`, `cache_read_tokens` = `cached_input_tokens`,
+  `cache_write_tokens` = `cache_write_input_tokens` (null when the Codex
+  version does not record it), `output_tokens` = `output_tokens`, which
+  includes reasoning, `reasoning_tokens` = `reasoning_output_tokens`.
+  `cost_usd` is null.
+- `response_id` is the record's `response_id`, OpenRouter's generation id.
+- A `task_complete` event with an `error` becomes an `error` event.

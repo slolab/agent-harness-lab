@@ -81,6 +81,7 @@ def test_a3_ac2_ac3_ac4_ac5_codex_runs_seeded_pinned_unattended_and_resumes(tmp_
         "--build-arg", "HARNESS_VERSION=0.156.1", str(IMAGES),
     ]]
     run = tmp_path / "runs/codex"
+    assert {"session.json", "result.json", "trace.jsonl", "trace.json", "codex", "turns"} <= {p.name for p in run.iterdir()}
     session, outcome = load(run / "session.json"), load(run / "result.json")
     assert session["image"]["harness_version"] == "0.156.1"
     assert session["permissions"]["applied"] == ["webfetch", "websearch"]

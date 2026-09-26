@@ -74,6 +74,10 @@ def read_saved_output(host_dir: Path, container_dir: str, container_path: Any) -
     return path.read_text(errors="replace")
 
 
+def token_count(value: Any) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
 def provider_key(config: RunConfig) -> str:
     return os.environ[PROVIDER_KEY_ENV[config.provider.name]]
 
