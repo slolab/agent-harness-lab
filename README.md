@@ -235,12 +235,8 @@ permissions:
 | Claude Code (account login or OpenRouter) | Enforced through managed settings |
 | Codex | `web_search = "disabled"` in the seeded `config.toml`; Codex has no separate fetch tool, so this also covers `webfetch` |
 | DeepSeek | Enforced by a global native tool guard |
-| OpenCode | Enforced through `permission` in the seeded `opencode.json` |
+| OpenCode | Enforced through `permission` in the seeded `opencode.json`; without a `websearch` denial AHL sets `OPENCODE_ENABLE_EXA=1` for Exa-backed web search |
 | Gemini, Antigravity, Claude Science | Warning; requested denials are not applied |
-
-Unless `websearch` is denied, AHL sets `OPENCODE_ENABLE_EXA=1`, which gives
-OpenCode its `websearch` tool through Exa's keyless endpoint. Without it,
-OpenCode 1.18.32 through OpenRouter has no `websearch` tool.
 
 Omit the block or use `deny: []` for no AHL denials. Resume installs the current
 rules, including removal of old AHL denials. `session.json` records requested,
