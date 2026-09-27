@@ -105,7 +105,8 @@ class _HeadlessRun:
                     for turn in self.turns:
                         self.active = turn
                         session_id = self._turn(turn, session_id) or session_id
-                        if turn["status"] not in ("completed", "timeout") or self.interrupts.count:
+                        resumable = turn["status"] == "completed" or (turn["status"] == "timeout" and session_id)
+                        if not resumable or self.interrupts.count:
                             break
             except KeyboardInterrupt:
                 pass

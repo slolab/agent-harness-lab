@@ -76,9 +76,9 @@ drivers; other harnesses are a usage error. `--timeout` applies to each turn
 (default 3600). `--env-file`, `--runs-dir`, `--name`, `--build` and relative
 paths behave as in `ahl up`; a relative `--turn` resolves against the working
 directory, and a `--name` whose run directory exists is a usage error. After a
-turn that times out, the next turn still runs and resumes the same session.
-After a turn that fails, errors or is interrupted, the remaining turns are
-skipped.
+turn that times out, the next turn still runs and resumes the same session. If
+the harness reported no session id before the timeout, or a turn fails, errors
+or is interrupted, the remaining turns are skipped.
 
 No session can wait for input: tools run without permission prompts, the
 ask-user tool is denied, and with OpenRouter every Claude Code model alias
