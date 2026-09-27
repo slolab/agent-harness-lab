@@ -39,6 +39,8 @@ def test_openrouter_route_keeps_native_model_and_secret_in_env(
             expected = {"OPENROUTER_API_KEY": "route-secret"}
             if harness == "deepseek":
                 expected["DSH_HOME"] = "/root/.dsh"
+            if harness == "opencode":
+                expected["OPENCODE_ENABLE_EXA"] = "1"
             assert env == expected
         run = tmp_path / "run"
         adapter.seed(run, config)
@@ -84,7 +86,7 @@ def test_openrouter_requires_key_and_explicit_model_and_loads_dotenv(
     (tmp_path / ".env").write_text("OPENROUTER_API_KEY=dotenv-secret\n")
     config = load_config(tmp_path / "config.yaml")
     assert get_adapter("opencode").build_env(config) == {
-        "OPENROUTER_API_KEY": "dotenv-secret"
+        "OPENROUTER_API_KEY": "dotenv-secret", "OPENCODE_ENABLE_EXA": "1"
     }
 
 

@@ -83,6 +83,12 @@ def test_a2_ac3_timeout_and_killed_runs_leave_no_blocking_container(project, lef
     assert [(t["status"], t["reason"]["code"]) for t in outcome["turns"]] == [("timeout", "timeout")]
     assert container_state(container) is None and "is gone" not in output
 
+    once = "echo session; [ -e /tmp/slept ] || { touch /tmp/slept; sleep 60; }"
+    code, output = finished(stub_run(processes, project, once, "--turn", "prompt.md", "--name", "next", "--timeout", "5"))
+    assert code == 124, output
+    turns = json.loads((project / "runs/next/result.json").read_text())["turns"]
+    assert [t["status"] for t in turns] == ["timeout", "completed"]
+
     killed = stub_run(processes, project, "sleep 300", "--runs-dir", "first", "--name", "r")
     session, deadline = project / "first/r/session.json", time.monotonic() + 180
     while not (session.is_file() and (project / "first/r/turns/1/stdout.jsonl").is_file()):

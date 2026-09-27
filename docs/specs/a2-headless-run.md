@@ -10,7 +10,7 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 
 - `ahl run`: flags, exit codes, run directory, `result.json` with key-based cost, and new `session.json` fields. Unique container names, also for `ahl up`, and teardown in every terminal state.
 - A normalized `trace.jsonl` with a JSON Schema and token definitions.
-- Headless drivers for Claude Code and OpenCode, including OpenCode web denial and OpenRouter provider routing.
+- Headless drivers for Claude Code and OpenCode, including OpenCode web search, web denial and OpenRouter provider routing.
 - A live, condensed view of each running turn on the terminal.
 
 ## Non-goals
@@ -26,7 +26,7 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 - Turn *n* is the *n*-th `--turn` file, delivered to the harness byte for byte. `--timeout` applies to each turn; the default is 3600.
 - `--env-file`, `--runs-dir`, `--name`, `--build` and path resolution behave as in `ahl up` (A1). A `--name` whose run directory exists, and a harness without a headless driver, are usage errors (exit 2).
 
-**Exit codes.** After a turn that does not complete, the remaining turns are skipped. When several rows apply, precedence is timeout, interrupted, error, failed.
+**Exit codes.** After a turn that times out, the next turn still runs and resumes the same session. After a turn that fails, errors or is interrupted, the remaining turns are skipped. When several rows apply, precedence is timeout, interrupted, error, failed.
 
 | Exit | Run `status` | Reason codes | When |
 |---|---|---|---|
@@ -52,7 +52,7 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 **`session.json`** keeps A1's fields, adds `"mode": "headless"` in `ahl run`, and adds for both `ahl run` and `ahl up`:
 
 - `container`: the Docker container name, unique per invocation. AHL removes the container in every terminal state, and a leftover container never blocks a new run. If AHL is killed with SIGKILL, the container may keep running, and `docker rm -f <container>` removes it.
-- `permissions.applied`: the existing field, now also listing OpenCode's web denials.
+- `permissions.applied`: the existing field, now also listing OpenCode's web denials. Unless `websearch` is denied, OpenCode gets its Exa-backed `websearch` tool (`OPENCODE_ENABLE_EXA=1`).
 - `model_parameters.unsupported`: configured `model.parameters` keys the harness cannot apply, e.g. `["provider"]`; empty when all were applied. Each also prints a warning; the run goes on.
 
 **`result.json`**
@@ -97,7 +97,7 @@ Callers such as biotope-bench run many harness sessions unattended and compare t
 ## Acceptance criteria
 
 - **AC-1** (unit) With Docker stubbed, `ahl run` takes the flags above with their defaults, and a relative `--turn` resolves against the working directory. Each exit code arises in its situation with its run status and reason: `docker exec` exit 125–127, a daemon error and a vanished container each give 3 and `infra`; a harness exit 1 gives `harness_exit`; a recorded HTTP 429 gives `provider_error`. A taken `--name` and a harness without a driver give exit 2 and no `result.json`.
-- **AC-2** (unit) In every terminal state other than exit 2, the run directory holds the files above, and `session.json` has `mode`, `container` and `model_parameters`. Status and reason follow the rules above. A three-turn run whose turn 2 fails lists turn 3 as `skipped` with `skipped_after_failure`, and the run takes turn 2's status and reason. SIGINT during a turn gives exit 130, `interrupted` for that turn and the run, and a written `result.json`.
+- **AC-2** (unit) In every terminal state other than exit 2, the run directory holds the files above, and `session.json` has `mode`, `container` and `model_parameters`. Status and reason follow the rules above. A three-turn run whose turn 2 fails lists turn 3 as `skipped` with `skipped_after_failure`, and the run takes turn 2's status and reason. A two-turn run whose turn 1 times out still runs turn 2, resuming the same session, and the run's status is `timeout`. An OpenCode config without a `websearch` deny sets the Exa switch; with the deny it does not. SIGINT during a turn gives exit 130, `interrupted` for that turn and the run, and a written `result.json`.
 - **AC-3** (unit, docker) Containers. Unit: `ahl run` and `ahl up` record the container name in `session.json`; two invocations with the same `--name` in different runs directories get different names; the container is removed in every terminal state. Docker, with a stub driver that calls no model: a turn outlasting `--timeout 5` exits 124 with `timeout` for the turn and the run, and the container named in `session.json` is gone. An `ahl run --name r` killed with SIGKILL mid-turn leaves its container running; a second `ahl run --name r` into another runs directory exits 0, and `docker rm -f` on the first run's recorded name removes the leftover.
 - **AC-4** (docker) After an `ahl run` whose stub driver writes into the workspace and the harness home, every file and directory under the run directory belongs to the calling user's uid and gid, and `rm -rf` of it as that user succeeds. Tested on Linux.
 - **AC-5** (unit) Key usage, with HTTP and the clock mocked: a settled delta is correct; the wait ends once the value has risen and settled; a value that never rises within the bound gives null, `settled: false` and `usage_not_updated`; a failed read gives null and `usage_read_failed` and the run still succeeds; failed, timed-out and interrupted turns get `after`; one null delta makes `totals.cost_usd_key_delta` null; a non-OpenRouter provider gives `key_usage: null`.

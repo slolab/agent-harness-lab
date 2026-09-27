@@ -105,7 +105,8 @@ class _HeadlessRun:
                     for turn in self.turns:
                         self.active = turn
                         session_id = self._turn(turn, session_id) or session_id
-                        if turn["status"] != "completed" or self.interrupts.count:
+                        resumable = turn["status"] == "completed" or (turn["status"] == "timeout" and session_id)
+                        if not resumable or self.interrupts.count:
                             break
             except KeyboardInterrupt:
                 pass
@@ -247,12 +248,12 @@ class _HeadlessRun:
             message = f"turn {self.active['index']} was interrupted"
             self.active.update(status="interrupted", reason={"code": "interrupted", "message": message})
         pending = [turn for turn in self.turns if turn["status"] is None]
-        stopped = next((turn for turn in self.turns if turn["status"] not in (None, "completed")), None)
-        cause = f"turn {stopped['index']} {stopped['status']}" if stopped else "the run failed before turn 1"
+        stopped = [turn for turn in self.turns if turn["status"] not in (None, "completed")]
+        cause = f"turn {stopped[-1]['index']} {stopped[-1]['status']}" if stopped else "the run failed before turn 1"
         for turn in pending:
             turn.update(status="skipped", reason={"code": "skipped_after_failure", "message": cause})
         if stopped:
-            return stopped["status"], stopped["reason"]
+            return stopped[0]["status"], stopped[0]["reason"]
         if self.failure is not None:
             return "error", {"code": "infra", "message": self.failure}
         return "completed", None

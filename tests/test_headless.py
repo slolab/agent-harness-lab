@@ -79,7 +79,7 @@ def container_env(args: list[str]) -> dict[str, str]:
 
 
 def turn_commands(docker, container: str) -> list[list[str]]:
-    return [call[call.index(container) + 1:] for call in docker.turn_execs()]
+    return [call[call.index(container) + 1:] for call in docker.turn_execs() if container in call]
 
 
 def test_a2_ac1_flags_default_and_failures_map_to_exit_codes(tmp_path, monkeypatch, docker):
@@ -143,12 +143,16 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
     config = write_config(tmp_path / "config.yaml", CLAUDE)
     turns = prompts(tmp_path, 3)
     ok, error = recorded("claude", "success"), recorded("claude", "error_result")
+    init = ok.splitlines(keepends=True)[0]
     scenarios = [
         ("completed", [Turn(stdout=ok)] * 3, {}, 0, ["completed"] * 3, None),
         ("failed", [Turn(stdout=ok), Turn(exit_code=1, stdout=error)], {}, 1,
          ["completed", "failed", "skipped"], ("failed", "harness_exit")),
         ("timeout", [Turn(raises=subprocess.TimeoutExpired("claude", 5))], {"sigints": ["kill -KILL -1"]}, 124,
          ["timeout", "skipped", "skipped"], ("timeout", "timeout")),
+        ("timeout-resumed", [Turn(stdout=init, raises=subprocess.TimeoutExpired("claude", 5)),
+                             Turn(exit_code=1, stdout=error)], {}, 124,
+         ["timeout", "failed", "skipped"], ("timeout", "timeout")),
         ("interrupted", [Turn(effect=interrupt, interrupt_wait=True)], {}, 130,
          ["interrupted", "skipped", "skipped"], ("interrupted", "interrupted")),
         ("interrupted-wait", [Turn(stdout=ok), Turn(stdout=ok, interrupt_wait=True)], {}, 130,
@@ -197,6 +201,10 @@ def test_a2_ac2_ac3_ac5_every_terminal_state_leaves_a_complete_run_directory(tmp
                 assert {k for k, v in turn.items() if v is not None} == {
                     "index", "prompt_file", "prompt_sha256", "status", "reason",
                 }
+        if name == "timeout-resumed":
+            _, resumed = turn_commands(docker, session["container"])
+            assert resumed[resumed.index("--resume") + 1] == session_id(ok)
+            assert outcome["turns"][2]["reason"]["message"] == "turn 2 failed"
         if name in ("timeout", "interrupted", "interrupted-wait"):
             after = outcome["turns"][len(scripted) - 1]["key_usage"]
             assert after["after"]["settled"] is False and after["delta_usd"] == pytest.approx(0.01)
@@ -287,7 +295,7 @@ def test_a2_ac6_claude_runs_unattended_resumes_and_maps_every_model_alias(tmp_pa
     assert [t["session_id"] for t in load(run / "result.json")["turns"]] == [session_id(ok)] * 2
 
 
-def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeypatch, docker):
+def test_a2_ac2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeypatch, docker):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     model_id = "openrouter/" + OPENCODE["model"]
     raw = {
@@ -309,7 +317,9 @@ def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeyp
     assert seeded["provider"]["openrouter"]["models"][OPENCODE["model"]]["options"]["provider"] == PIN
     assert session["model_parameters"] == {"unsupported": []}
     assert session["permissions"]["applied"] == ["webfetch", "websearch"]
-    headless = json.loads(container_env(docker.launches()[-1])["OPENCODE_PERMISSION"])
+    env = container_env(docker.launches()[-1])
+    headless = json.loads(env["OPENCODE_PERMISSION"])
+    assert "OPENCODE_ENABLE_EXA" not in env
     assert {**seeded["permission"], **headless} == dict.fromkeys(OPENCODE_PERMISSION_KEYS, "allow") | {
         "question": "deny", "webfetch": "deny", "websearch": "deny",
     }
@@ -329,7 +339,10 @@ def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeyp
     assert "OPENCODE_PERMISSION" not in container_env(docker.launches()[-1])
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    write_config(config, {**raw, "provider": "anthropic", "model": {"name": "claude-sonnet-4-6", "parameters": {"provider": PIN}}})
+    write_config(config, {
+        **raw, "provider": "anthropic", "model": {"name": "claude-sonnet-4-6", "parameters": {"provider": PIN}},
+        "permissions": {"deny": ["webfetch"]},
+    })
     docker.turns = [Turn(stdout=ok)]
     direct = ahl("run", "-c", config, *prompts(tmp_path, 1), "--no-build", "--name", "direct")
 
@@ -337,6 +350,7 @@ def test_a2_ac6_opencode_models_routing_permissions_and_resume(tmp_path, monkeyp
     seeded = load(tmp_path / "runs/direct/opencode/config/opencode.json")
     assert "provider" not in seeded and seeded["model"] == seeded["small_model"] == "anthropic/claude-sonnet-4-6"
     assert load(tmp_path / "runs/direct/session.json")["model_parameters"] == {"unsupported": ["provider"]}
+    assert container_env(docker.launches()[-1])["OPENCODE_ENABLE_EXA"] == "1"
 
 
 @pytest.mark.parametrize(

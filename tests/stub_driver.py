@@ -16,7 +16,7 @@ class StubDriver:
         return ["sh", "-c", os.environ["AHL_STUB_TURN"]]
 
     def report(self, stdout):
-        return TurnReport(session_id=None, error=None, provider_error=False, replied=True)
+        return TurnReport(session_id=stdout.strip() or None, error=None, provider_error=False, replied=True)
 
     def view(self, record):
         return []
