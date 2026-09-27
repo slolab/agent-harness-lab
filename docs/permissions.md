@@ -18,7 +18,7 @@ configuration errors.
 | Claude Code | `websearch` → `WebSearch`; `webfetch` → `WebFetch` |
 | Codex | `websearch` or `webfetch` sets `web_search = "disabled"` in the seeded `config.toml`; Codex has no separate fetch tool |
 | DeepSeek | `websearch` → `web_search`; `webfetch` → `web_fetch` |
-| OpenCode | `websearch` and `webfetch` set to `deny` under `permission` in the seeded `opencode.json` |
+| OpenCode | `websearch` and `webfetch` set to `deny` under `permission` in the seeded `opencode.json`. Without a `websearch` denial, AHL sets `OPENCODE_ENABLE_EXA=1`, which enables OpenCode's Exa-backed `websearch` tool |
 | Gemini, Antigravity, Claude Science | Unsupported; one warning lists unapplied operations and reasons |
 
 Unsupported mappings continue launching and record the gap. They never claim
