@@ -107,31 +107,17 @@ class OpenCodeAdapter:
     driver = OpenCodeDriver()
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
-        web_search = {} if "websearch" in config.permissions.deny else {"OPENCODE_ENABLE_EXA": "1"}
-        return self._provider_env(config) | web_search
-
-    def _provider_env(self, config: RunConfig) -> dict[str, str]:
-        provider = config.provider.name
-        key = provider_key(config)
-        if provider == "anthropic":
-            return {"ANTHROPIC_API_KEY": key}
-        if provider == "openrouter":
-            return {"OPENROUTER_API_KEY": key}
-        if provider == "openai":
-            return {"OPENAI_API_KEY": key}
-        if provider == "gemini":
-            return {"GEMINI_API_KEY": key}
-        if provider == "vertex":
-            params = config.provider.parameters
-            location = str(params["location"])
-            project = str(params["project"])
-            return {
-                "GOOGLE_API_KEY": key,
-                "GOOGLE_CLOUD_PROJECT": project,
+        env = {config.key_env: provider_key(config)}
+        if config.provider.name == "vertex":
+            location = str(config.provider.parameters["location"])
+            env |= {
+                "GOOGLE_CLOUD_PROJECT": str(config.provider.parameters["project"]),
                 "GOOGLE_CLOUD_LOCATION": location,
                 "VERTEX_LOCATION": location,
             }
-        raise ValueError(f"unsupported provider: {provider}")
+        if "websearch" not in config.permissions.deny:
+            env["OPENCODE_ENABLE_EXA"] = "1"
+        return env
 
     def seed(self, run_dir: Path, config: RunConfig) -> Volumes:
         config_dir = _config_dir(run_dir)
