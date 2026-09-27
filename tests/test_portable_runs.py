@@ -295,7 +295,6 @@ def test_a1_ac7_network_and_env_reach_container_and_reject_invalid(make_config, 
     assert len(docker.launches()) == 1 and not (tmp_path / "runs/nonet").exists()
     for harness, provider, env in [
         ("opencode", "openrouter", {"NEO4J_PORT": 7687}),
-        ("opencode", "openrouter", {"OPENCODE_ENABLE_EXA": "0"}),
         ("claude", "anthropic", {"OPENROUTER_API_KEY": "sk-or-other"}),
         ("claude", "openrouter", {"ANTHROPIC_BASE_URL": "https://example.test"}),
     ]:

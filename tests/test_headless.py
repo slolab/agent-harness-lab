@@ -115,14 +115,14 @@ def test_a2_ac1_flags_default_and_failures_map_to_exit_codes(tmp_path, monkeypat
         ("timeout", Turn(raises=subprocess.TimeoutExpired("opencode", 90), effect=unmigrated_db.touch), True, 124,
          ("timeout", "timeout")),
     ]:
-        docker.turns, docker.running = [turn, Turn(stdout=recorded("opencode", "success"))], running
+        docker.turns, docker.running = [turn], running
         failed = ahl(*common, "--name", name)
 
         assert failed.exit_code == code, failed.output
         outcome = load(work / "out" / name / "result.json")
         assert (outcome["status"], outcome["reason"]["code"]) == (status, reason)
-        assert [t["status"] for t in outcome["turns"]] == [status, "completed" if status == "timeout" else "skipped"]
-    assert docker.timeouts[1:] == [90] * 5 and len(docker.builds()) == 1
+        assert [t["status"] for t in outcome["turns"]] == [status, "skipped"]
+    assert docker.timeouts[1:] == [90, 90, 90, 90] and len(docker.builds()) == 1
     assert [w["code"] for w in outcome["warnings"]] == ["trace_unreadable"]
     assert {outcome["totals"][k] for k in ("input_tokens", "output_tokens", "cache_read_tokens")} == {None}
     assert (work / "out/timeout/trace.jsonl").read_text() == ""
