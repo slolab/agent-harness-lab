@@ -107,6 +107,10 @@ class OpenCodeAdapter:
     driver = OpenCodeDriver()
 
     def build_env(self, config: RunConfig) -> dict[str, str]:
+        web_search = {} if "websearch" in config.permissions.deny else {"OPENCODE_ENABLE_EXA": "1"}
+        return self._provider_env(config) | web_search
+
+    def _provider_env(self, config: RunConfig) -> dict[str, str]:
         provider = config.provider.name
         key = provider_key(config)
         if provider == "anthropic":
