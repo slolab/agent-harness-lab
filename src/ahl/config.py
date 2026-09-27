@@ -237,7 +237,7 @@ def _reject_managed_env(config: RunConfig) -> None:
         if name in managed:
             raise ConfigError(
                 f"env.{name}: AHL sets this variable for harness '{config.harness.name}'"
-                f" with provider '{config.provider.name}'; remove it from 'env'"
+                f" with provider '{config.provider.name}' and the configured permissions; remove it from 'env'"
             )
 
 
